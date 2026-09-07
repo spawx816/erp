@@ -1,0 +1,519 @@
+const { db, runTransaction } = require('../../database/db');
+const InventoryService = require('./inventoryService');
+const { logAudit } = require('../../middlewares/audit');
+
+const inventoryController = {
+  // Current stock list
+  getStock: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { warehouse_id, branch_id, search, low_stock, page = 1, limit = 50 } = req.query;
+      const offset = (page - 1) * limit;
+
+      let whereClauses = ['p.company_id = ?'];
+      let params = [companyId];
+
+      if (warehouse_id) {
+        whereClauses.push('inv.warehouse_id = ?');
+        params.push(warehouse_id);
+      }
+      if (branch_id) {
+        whereClauses.push('inv.branch_id = ?');
+        params.push(branch_id);
+      }
+      if (search) {
+        whereClauses.push('(p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+
+      let whereSQL = whereClauses.join(' AND ');
+
+      let query = `
+        SELECT inv.*,
+               p.name as product_name, p.sku as product_sku, p.cost, p.price, p.stock_min, p.stock_max, p.tax_rate,
+               pv.variant_name, pv.sku as variant_sku,
+               w.name as warehouse_name,
+               br.name as branch_name,
+               c.name as category_name
+        FROM inventories inv
+        JOIN products p ON inv.product_id = p.id
+        LEFT JOIN product_variants pv ON inv.variant_id = pv.id
+        JOIN warehouses w ON inv.warehouse_id = w.id
+        JOIN branches br ON inv.branch_id = br.id
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE ${whereSQL}
+      `;
+
+      if (low_stock === 'true') {
+        query += ` AND inv.quantity <= p.stock_min`;
+      }
+
+      query += ` ORDER BY p.name ASC LIMIT ? OFFSET ?`;
+
+      const rows = db.prepare(query).all(...params, limit, offset);
+
+      return res.json({ success: true, data: rows });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error consultando existencias.', error: err.message });
+    }
+  },
+
+  // Kardex movements
+  getKardex: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { product_id, warehouse_id, movement_type, start_date, end_date, page = 1, limit = 50 } = req.query;
+      const offset = (page - 1) * limit;
+
+      let whereClauses = ['m.company_id = ?'];
+      let params = [companyId];
+
+      if (product_id) {
+        whereClauses.push('m.product_id = ?');
+        params.push(product_id);
+      }
+      if (warehouse_id) {
+        whereClauses.push('m.warehouse_id = ?');
+        params.push(warehouse_id);
+      }
+      if (movement_type) {
+        whereClauses.push('m.movement_type = ?');
+        params.push(movement_type);
+      }
+      if (start_date) {
+        whereClauses.push('date(m.created_at) >= ?');
+        params.push(start_date);
+      }
+      if (end_date) {
+        whereClauses.push('date(m.created_at) <= ?');
+        params.push(end_date);
+      }
+
+      const whereSQL = whereClauses.join(' AND ');
+
+      const count = db.prepare(`SELECT COUNT(*) as total FROM inventory_movements m WHERE ${whereSQL}`).get(...params).total;
+
+      const movements = db.prepare(`
+        SELECT m.*,
+               p.name as product_name, p.sku as product_sku,
+               pv.variant_name,
+               w.name as warehouse_name,
+               w_to.name as to_warehouse_name,
+               u.username, u.first_name || ' ' || u.last_name as user_name
+        FROM inventory_movements m
+        JOIN products p ON m.product_id = p.id
+        LEFT JOIN product_variants pv ON m.variant_id = pv.id
+        JOIN warehouses w ON m.warehouse_id = w.id
+        LEFT JOIN warehouses w_to ON m.to_warehouse_id = w_to.id
+        JOIN users u ON m.user_id = u.id
+        WHERE ${whereSQL}
+        ORDER BY m.created_at DESC
+        LIMIT ? OFFSET ?
+      `).all(...params, limit, offset);
+
+      return res.json({
+        success: true,
+        data: movements,
+        pagination: {
+          total: count,
+          page: parseInt(page, 10),
+          limit: parseInt(limit, 10),
+          pages: Math.ceil(count / limit)
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error consultando kardex.', error: err.message });
+    }
+  },
+
+  // Manual stock adjustment (In/Out)
+  adjustStock: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { warehouse_id, product_id, variant_id = null, adjustment_type, quantity, unit_cost, reason } = req.body;
+
+      if (!warehouse_id || !product_id || !quantity || !reason) {
+        return res.status(400).json({ success: false, message: 'Almacén, producto, cantidad y motivo son obligatorios.' });
+      }
+
+      const warehouse = db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(warehouse_id, companyId);
+      if (!warehouse) {
+        return res.status(404).json({ success: false, message: 'Almacén no encontrado.' });
+      }
+
+      const qty = Math.abs(Number(quantity)) * (adjustment_type === 'out' ? -1 : 1);
+      const movType = adjustment_type === 'out' ? 'adjustment_out' : 'adjustment_in';
+
+      const result = runTransaction(() => {
+        const mov = InventoryService.recordMovement({
+          companyId,
+          branchId: warehouse.branch_id,
+          warehouseId: warehouse_id,
+          productId,
+          variantId,
+          userId: req.user.id,
+          movementType: movType,
+          quantity: qty,
+          unitCost: unitCost || 0,
+          reason
+        });
+
+        logAudit({
+          companyId,
+          userId: req.user.id,
+          ipAddress: req.ip,
+          module: 'inventory',
+          action: 'adjust_stock',
+          recordId: mov.movement_id,
+          newValues: { warehouse_id, product_id, qty, reason },
+          description: `Ajuste manual de inventario (${adjustment_type}): ${qty} unidades. Motivo: ${reason}`
+        });
+
+        return mov;
+      });
+
+      return res.json({ success: true, message: 'Ajuste de inventario aplicado exitosamente.', data: result });
+    } catch (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+  },
+
+  // TRANSFERS
+  getTransfers: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const transfers = db.prepare(`
+        SELECT t.*,
+               w1.name as from_warehouse_name, b1.name as from_branch_name,
+               w2.name as to_warehouse_name, b2.name as to_branch_name,
+               u.first_name || ' ' || u.last_name as created_by_name
+        FROM inventory_transfers t
+        JOIN warehouses w1 ON t.from_warehouse_id = w1.id
+        JOIN branches b1 ON t.from_branch_id = b1.id
+        JOIN warehouses w2 ON t.to_warehouse_id = w2.id
+        JOIN branches b2 ON t.to_branch_id = b2.id
+        JOIN users u ON t.user_id = u.id
+        WHERE t.company_id = ?
+        ORDER BY t.created_at DESC
+      `).all(companyId);
+
+      const getItems = db.prepare(`
+        SELECT ti.*, p.name as product_name, p.sku
+        FROM inventory_transfer_items ti
+        JOIN products p ON ti.product_id = p.id
+        WHERE ti.transfer_id = ?
+      `);
+
+      transfers.forEach(tr => {
+        tr.items = getItems.all(tr.id);
+      });
+
+      return res.json({ success: true, data: transfers });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error consultando transferencias.', error: err.message });
+    }
+  },
+
+  createTransfer: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { from_warehouse_id, to_warehouse_id, notes, items } = req.body;
+
+      if (!from_warehouse_id || !to_warehouse_id || !items || items.length === 0) {
+        return res.status(400).json({ success: false, message: 'Almacén origen, destino e ítems son requeridos.' });
+      }
+
+      if (Number(from_warehouse_id) === Number(to_warehouse_id)) {
+        return res.status(400).json({ success: false, message: 'El almacén de origen y destino no pueden ser el mismo.' });
+      }
+
+      const wFrom = db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(from_warehouse_id);
+      const wTo = db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(to_warehouse_id);
+
+      const transferNumber = `TRF-${Date.now().toString().slice(-6)}`;
+
+      const transferId = runTransaction(() => {
+        // Validate stock for all items
+        for (const item of items) {
+          const currentStock = InventoryService.getCurrentStock(from_warehouse_id, item.product_id, item.variant_id);
+          if (currentStock < Number(item.quantity)) {
+            throw new Error(`Stock insuficiente para el producto ID ${item.product_id}. Disponible: ${currentStock}, Solicitado: ${item.quantity}`);
+          }
+        }
+
+        const stmtTr = db.prepare(`
+          INSERT INTO inventory_transfers (
+            company_id, from_branch_id, from_warehouse_id, to_branch_id, to_warehouse_id,
+            user_id, transfer_number, status, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'sent', ?)
+        `);
+
+        const resTr = stmtTr.run(companyId, wFrom.branch_id, from_warehouse_id, wTo.branch_id, to_warehouse_id, req.user.id, transferNumber, notes || null);
+        const trId = resTr.lastInsertRowid;
+
+        const stmtItem = db.prepare(`
+          INSERT INTO inventory_transfer_items (transfer_id, product_id, variant_id, quantity, unit_cost)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+
+        for (const item of items) {
+          stmtItem.run(trId, item.product_id, item.variant_id || null, item.quantity, item.unit_cost || 0);
+
+          // Deduct from source warehouse immediately
+          InventoryService.recordMovement({
+            companyId,
+            branchId: wFrom.branch_id,
+            warehouseId: from_warehouse_id,
+            toWarehouseId: to_warehouse_id,
+            productId: item.product_id,
+            variantId: item.variant_id || null,
+            userId: req.user.id,
+            movementType: 'transfer_out',
+            quantity: -Math.abs(Number(item.quantity)),
+            unitCost: item.unit_cost || 0,
+            referenceType: 'inventory_transfers',
+            referenceId: trId,
+            reason: `Envío de transferencia ${transferNumber}`
+          });
+        }
+
+        logAudit({
+          companyId,
+          userId: req.user.id,
+          ipAddress: req.ip,
+          module: 'inventory',
+          action: 'create_transfer',
+          recordId: trId,
+          description: `Transferencia creada y despachada ${transferNumber}`
+        });
+
+        return trId;
+      });
+
+      return res.status(201).json({ success: true, message: 'Transferencia creada y despachada exitosamente.', transfer_id: transferId });
+    } catch (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+  },
+
+  receiveTransfer: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { id } = req.params;
+
+      const transfer = db.prepare(`
+        SELECT * FROM inventory_transfers WHERE id = ? AND company_id = ?
+      `).get(id, companyId);
+
+      if (!transfer) {
+        return res.status(404).json({ success: false, message: 'Transferencia no encontrada.' });
+      }
+
+      if (transfer.status === 'received') {
+        return res.status(400).json({ success: false, message: 'Esta transferencia ya ha sido recibida previamente.' });
+      }
+
+      runTransaction(() => {
+        const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id = ?').all(id);
+
+        for (const item of items) {
+          InventoryService.recordMovement({
+            companyId,
+            branchId: transfer.to_branch_id,
+            warehouseId: transfer.to_warehouse_id,
+            toWarehouseId: null,
+            productId: item.product_id,
+            variantId: item.variant_id,
+            userId: req.user.id,
+            movementType: 'transfer_in',
+            quantity: Math.abs(Number(item.quantity)),
+            unitCost: item.unit_cost || 0,
+            referenceType: 'inventory_transfers',
+            referenceId: transfer.id,
+            reason: `Recepción de transferencia ${transfer.transfer_number}`
+          });
+        }
+
+        db.prepare(`
+          UPDATE inventory_transfers
+          SET status = 'received', received_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(id);
+
+        logAudit({
+          companyId,
+          userId: req.user.id,
+          ipAddress: req.ip,
+          module: 'inventory',
+          action: 'receive_transfer',
+          recordId: id,
+          description: `Recepción de transferencia ${transfer.transfer_number}`
+        });
+      });
+
+      return res.json({ success: true, message: 'Transferencia recibida e inventario incrementado en almacén de destino.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  // LOTS (LOTES DE INVENTARIO Y ANTIGÜEDAD)
+  getLots: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { product_id, warehouse_id } = req.query;
+
+      let where = ['l.company_id = ?'];
+      let params = [companyId];
+
+      if (product_id) { where.push('l.product_id = ?'); params.push(product_id); }
+      if (warehouse_id) { where.push('l.warehouse_id = ?'); params.push(warehouse_id); }
+
+      const lots = db.prepare(`
+        SELECT l.*,
+               p.name as product_name, p.sku, p.shade_number, p.line,
+               w.name as warehouse_name,
+               s.company_name as supplier_name,
+               CAST((julianday('now') - julianday(l.entry_date)) AS INTEGER) as days_in_inventory,
+               CAST((julianday(l.expiration_date) - julianday('now')) AS INTEGER) as days_to_expiration
+        FROM inventory_lots l
+        JOIN products p ON l.product_id = p.id
+        JOIN warehouses w ON l.warehouse_id = w.id
+        LEFT JOIN suppliers s ON l.supplier_id = s.id
+        WHERE ${where.join(' AND ')}
+        ORDER BY l.entry_date DESC
+      `).all(...params);
+
+      return res.json({ success: true, data: lots });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  // INVENTORY ROTATION & AGE ANALYSIS (ANALISIS DE ROTACIÓN)
+  getInventoryAnalysis: (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const noMovementDays = parseInt(req.query.no_movement_days || 60, 10);
+
+      // Total Inventory Valuation
+      const totals = db.prepare(`
+        SELECT COALESCE(SUM(p.cost * inv.quantity), 0) as total_valuation,
+               COALESCE(SUM(inv.quantity), 0) as total_units,
+               COUNT(DISTINCT p.id) as total_products
+        FROM products p
+        JOIN inventories inv ON inv.product_id = p.id
+        WHERE p.company_id = ?
+      `).get(companyId);
+
+      // Stock status counts
+      const stockCounts = db.prepare(`
+        SELECT
+          COUNT(CASE WHEN inv_sum <= 0 THEN 1 END) as out_of_stock,
+          COUNT(CASE WHEN inv_sum > 0 AND inv_sum <= stock_min THEN 1 END) as low_stock,
+          COUNT(CASE WHEN inv_sum > stock_min THEN 1 END) as optimal_stock
+        FROM (
+          SELECT p.id, p.stock_min, COALESCE(SUM(inv.quantity), 0) as inv_sum
+          FROM products p
+          LEFT JOIN inventories inv ON inv.product_id = p.id
+          WHERE p.company_id = ?
+          GROUP BY p.id
+        )
+      `).get(companyId);
+
+      // Product sales in last 30 days
+      const productsRotation = db.prepare(`
+        SELECT p.id, p.name, p.sku, p.shade_number, p.line, p.cost, p.price,
+               c.name as category_name, b.name as brand_name,
+               COALESCE(SUM(inv.quantity), 0) as current_stock,
+               (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE si.product_id = p.id AND s.status != 'cancelled' AND s.created_at >= date('now', '-30 days')) as units_sold_30d,
+               (SELECT MAX(s.created_at) FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE si.product_id = p.id AND s.status != 'cancelled') as last_sale_date
+        FROM products p
+        LEFT JOIN inventories inv ON inv.product_id = p.id
+        LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN brands b ON p.brand_id = b.id
+        WHERE p.company_id = ?
+        GROUP BY p.id
+        ORDER BY units_sold_30d DESC
+      `).all(companyId);
+
+      const classified = productsRotation.map(p => {
+        let rotationClass = 'sin_movimiento';
+        const sold = parseFloat(p.units_sold_30d || 0);
+
+        let daysSinceSale = 999;
+        if (p.last_sale_date) {
+          daysSinceSale = Math.floor((new Date() - new Date(p.last_sale_date)) / (1000 * 60 * 60 * 24));
+        }
+
+        if (sold >= 25) rotationClass = 'alta';
+        else if (sold >= 8) rotationClass = 'media';
+        else if (sold >= 1) rotationClass = 'baja';
+        else rotationClass = 'sin_movimiento';
+
+        const isDeadStock = daysSinceSale >= noMovementDays;
+
+        return {
+          ...p,
+          rotation_class: rotationClass,
+          days_since_last_sale: daysSinceSale === 999 ? null : daysSinceSale,
+          is_dead_stock: isDeadStock,
+          stock_valuation: Math.round(p.cost * p.current_stock * 100) / 100
+        };
+      });
+
+      // Group counts
+      const rotationSummary = {
+        alta: classified.filter(p => p.rotation_class === 'alta').length,
+        media: classified.filter(p => p.rotation_class === 'media').length,
+        baja: classified.filter(p => p.rotation_class === 'baja').length,
+        sin_movimiento: classified.filter(p => p.is_dead_stock).length
+      };
+
+      // Valuation by category
+      const valuationByCategory = db.prepare(`
+        SELECT c.name, COALESCE(SUM(p.cost * inv.quantity), 0) as valuation
+        FROM categories c
+        JOIN products p ON p.category_id = c.id
+        JOIN inventories inv ON inv.product_id = p.id
+        WHERE c.company_id = ?
+        GROUP BY c.id
+        ORDER BY valuation DESC
+      `).all(companyId);
+
+      // Valuation by brand
+      const valuationByBrand = db.prepare(`
+        SELECT b.name, COALESCE(SUM(p.cost * inv.quantity), 0) as valuation
+        FROM brands b
+        JOIN products p ON p.brand_id = b.id
+        JOIN inventories inv ON inv.product_id = p.id
+        WHERE b.company_id = ?
+        GROUP BY b.id
+        ORDER BY valuation DESC
+      `).all(companyId);
+
+      return res.json({
+        success: true,
+        data: {
+          kpis: {
+            total_valuation: totals.total_valuation,
+            total_units: totals.total_units,
+            total_products: totals.total_products,
+            out_of_stock: stockCounts.out_of_stock,
+            low_stock: stockCounts.low_stock,
+            optimal_stock: stockCounts.optimal_stock,
+            no_movement_days_threshold: noMovementDays
+          },
+          rotation_summary: rotationSummary,
+          products: classified,
+          valuation_by_category: valuationByCategory,
+          valuation_by_brand: valuationByBrand
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+};
+
+module.exports = inventoryController;
