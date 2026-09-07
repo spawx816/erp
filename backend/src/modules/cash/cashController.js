@@ -16,16 +16,17 @@ const cashController = {
 
       const registers = await db.prepare(`
         SELECT cr.*, b.name as branch_name,
-               (SELECT cs.id FROM cash_sessions cs WHERE cs.cash_register_id = cr.id AND cs.status = 'open') as active_session_id,
-               (SELECT u.username FROM cash_sessions cs JOIN users u ON cs.user_id = u.id WHERE cs.cash_register_id = cr.id AND cs.status = 'open') as active_cashier
+               (SELECT cs.id FROM cash_sessions cs WHERE cs.cash_register_id = cr.id AND cs.status = 'open' ORDER BY cs.id DESC LIMIT 1) as active_session_id,
+               (SELECT u.username FROM cash_sessions cs JOIN users u ON cs.user_id = u.id WHERE cs.cash_register_id = cr.id AND cs.status = 'open' ORDER BY cs.id DESC LIMIT 1) as active_cashier
         FROM cash_registers cr
-        JOIN branches b ON cr.branch_id = b.id
+        LEFT JOIN branches b ON cr.branch_id = b.id
         WHERE ${where}
         ORDER BY cr.name ASC
       `).all(...params);
 
       return res.json({ success: true, data: registers });
     } catch (err) {
+      console.error('Error in getRegisters:', err);
       return res.status(500).json({ success: false, message: 'Error consultando cajas.', error: err.message });
     }
   },
@@ -152,7 +153,7 @@ const cashController = {
         return res.status(400).json({ success: false, message: 'Sesión, tipo, monto y motivo son obligatorios.' });
       }
 
-      const session = await db.prepare('SELECT * FROM cash_sessions WHERE id = ? AND status = "open"').get(session_id);
+      const session = await db.prepare("SELECT * FROM cash_sessions WHERE id = ? AND status = 'open'").get(session_id);
       if (!session) {
         return res.status(404).json({ success: false, message: 'Sesión de caja no encontrada o cerrada.' });
       }
@@ -175,6 +176,7 @@ const cashController = {
 
       return res.json({ success: true, message: 'Movimiento de caja registrado exitosamente.' });
     } catch (err) {
+      console.error('Error in recordCashMovement:', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   },
@@ -185,7 +187,7 @@ const cashController = {
       const userId = req.user.id;
       const { session_id, counted_cash, total_card = 0, total_transfer = 0, total_check = 0, total_credit = 0, close_notes = '' } = req.body;
 
-      const session = await db.prepare('SELECT * FROM cash_sessions WHERE id = ? AND status = "open"').get(session_id);
+      const session = await db.prepare("SELECT * FROM cash_sessions WHERE id = ? AND status = 'open'").get(session_id);
       if (!session) {
         return res.status(404).json({ success: false, message: 'Sesión no encontrada o ya se encuentra cerrada.' });
       }

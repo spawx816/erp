@@ -452,7 +452,7 @@ const financeController = {
 
       let activeSession = null;
       if (payment_method === 'cash') {
-        activeSession = await db.prepare('SELECT id FROM cash_sessions WHERE user_id = ? AND branch_id = ? AND status = "open"').get(userId, branchId);
+        activeSession = await db.prepare("SELECT id FROM cash_sessions WHERE user_id = ? AND branch_id = ? AND status = 'open'").get(userId, branchId);
       }
 
       const expenseDate = new Date().toISOString().split('T')[0];
