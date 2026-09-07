@@ -148,6 +148,7 @@ export default function App() {
             {/* Dashboard */}
             {currentTab === 'dashboard' && (
               <DashboardPage
+                user={user}
                 activeBranch={activeBranch}
                 onNavigate={(tab) => setCurrentTab(tab)}
               />
@@ -165,37 +166,37 @@ export default function App() {
             )}
 
             {currentTab === 'sales' && (
-              <SalesHistoryPage activeBranch={activeBranch} />
+              <SalesHistoryPage user={user} activeBranch={activeBranch} />
             )}
             {currentTab === 'credit-notes' && (
-              <CreditNotesPage activeBranch={activeBranch} />
+              <CreditNotesPage user={user} activeBranch={activeBranch} />
             )}
 
             {/* Clientes & Proveedores (Terceros) */}
-            {currentTab === 'customers' && <ThirdPartiesPage initialMode="customers" onNavigate={setCurrentTab} />}
-            {currentTab === 'customer-statement' && <ThirdPartiesPage initialMode="customer-statement" onNavigate={setCurrentTab} />}
-            {currentTab === 'credit-risk' && <ThirdPartiesPage initialMode="credit-risk" onNavigate={setCurrentTab} />}
-            {currentTab === 'suppliers' && <ThirdPartiesPage initialMode="suppliers" onNavigate={setCurrentTab} />}
-            {currentTab === 'third-parties' && <ThirdPartiesPage initialMode="customers" onNavigate={setCurrentTab} />}
+            {currentTab === 'customers' && <ThirdPartiesPage user={user} initialMode="customers" onNavigate={setCurrentTab} />}
+            {currentTab === 'customer-statement' && <ThirdPartiesPage user={user} initialMode="customer-statement" onNavigate={setCurrentTab} />}
+            {currentTab === 'credit-risk' && <ThirdPartiesPage user={user} initialMode="credit-risk" onNavigate={setCurrentTab} />}
+            {currentTab === 'suppliers' && <ThirdPartiesPage user={user} initialMode="suppliers" onNavigate={setCurrentTab} />}
+            {currentTab === 'third-parties' && <ThirdPartiesPage user={user} initialMode="customers" onNavigate={setCurrentTab} />}
 
             {/* Cobros & Finanzas */}
-            {currentTab === 'collections' && <FinancePage activeBranch={activeBranch} initialTab="cxc" />}
-            {currentTab === 'collection-history' && <FinancePage activeBranch={activeBranch} initialTab="cxc" />}
-            {currentTab === 'collection-promises' && <ThirdPartiesPage initialMode="customers" />}
-            {currentTab === 'cxc-dashboard' && <FinancePage activeBranch={activeBranch} initialTab="aging" />}
-            {currentTab === 'cxp-dashboard' && <FinancePage activeBranch={activeBranch} initialTab="cxp" />}
-            {currentTab === 'expenses' && <FinancePage activeBranch={activeBranch} initialTab="expenses" />}
-            {currentTab === 'finance' && <FinancePage activeBranch={activeBranch} initialTab="cxc" />}
+            {currentTab === 'collections' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}
+            {currentTab === 'collection-history' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}
+            {currentTab === 'collection-promises' && <ThirdPartiesPage user={user} initialMode="customers" />}
+            {currentTab === 'cxc-dashboard' && <FinancePage user={user} activeBranch={activeBranch} initialTab="aging" />}
+            {currentTab === 'cxp-dashboard' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxp" />}
+            {currentTab === 'expenses' && <FinancePage user={user} activeBranch={activeBranch} initialTab="expenses" />}
+            {currentTab === 'finance' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}
 
             {/* Inventario & Tintes */}
-            {currentTab === 'products' && <ProductsPage />}
-            {currentTab === 'dye-matrix' && <DyeMatrixPage onNavigateToPos={() => setCurrentTab('pos')} />}
-            {currentTab === 'inventory' && <InventoryPage initialTab="stock" />}
-            {currentTab === 'inventory-lots' && <InventoryPage initialTab="lots" />}
-            {currentTab === 'inventory-analysis' && <InventoryPage initialTab="analysis" />}
+            {currentTab === 'products' && <ProductsPage user={user} />}
+            {currentTab === 'dye-matrix' && <DyeMatrixPage user={user} onNavigateToPos={() => setCurrentTab('pos')} />}
+            {currentTab === 'inventory' && <InventoryPage user={user} initialTab="stock" />}
+            {currentTab === 'inventory-lots' && <InventoryPage user={user} initialTab="lots" />}
+            {currentTab === 'inventory-analysis' && <InventoryPage user={user} initialTab="analysis" />}
 
             {/* Compras */}
-            {currentTab === 'purchases' && <PurchasesPage activeBranch={activeBranch} />}
+            {currentTab === 'purchases' && <PurchasesPage user={user} activeBranch={activeBranch} />}
 
             {/* Gastos & Caja Chica & Pagos Fijos */}
             {currentTab === 'cash-register' && (
@@ -206,11 +207,11 @@ export default function App() {
                 onRefreshUser={checkAuth}
               />
             )}
-            {currentTab === 'fixed-expenses' && <RecurringExpensesPage />}
+            {currentTab === 'fixed-expenses' && <RecurringExpensesPage user={user} />}
 
             {/* Vendedores & Comisiones */}
-            {currentTab === 'salespeople' && <SalespeoplePage initialTab="salespeople" />}
-            {currentTab === 'commissions' && <SalespeoplePage initialTab="commissions" />}
+            {currentTab === 'salespeople' && <SalespeoplePage user={user} initialTab="salespeople" />}
+            {currentTab === 'commissions' && <SalespeoplePage user={user} initialTab="commissions" />}
 
             {/* Reportes & Cierre Mensual */}
             {currentTab === 'reports' && <ReportsPage activeBranch={activeBranch} />}

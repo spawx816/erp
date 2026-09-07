@@ -30,7 +30,8 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
     setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const menuSections = [
+  // Define all available menu sections
+  const allSections = [
     {
       id: 'dashboard',
       label: 'DASHBOARD',
@@ -54,18 +55,19 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       items: [
         { id: 'customers', label: 'Clientes', icon: Users },
         { id: 'customer-statement', label: 'Estado de Cuenta', icon: FileText },
-        { id: 'credit-risk', label: 'Crédito y Riesgo', icon: ShieldAlert }
+        { id: 'credit-risk', label: 'Crédito y Riesgo', icon: ShieldAlert, roles: ['admin', 'gerente', 'cobros'] }
       ]
     },
     {
       id: 'cobros',
       label: 'COBROS',
       icon: HandCoins,
+      roles: ['admin', 'gerente', 'cajero', 'cobros', 'vendedor'],
       items: [
         { id: 'collections', label: 'Registrar Cobro', icon: HandCoins },
         { id: 'collection-history', label: 'Historial', icon: History },
-        { id: 'collection-promises', label: 'Compromisos', icon: CalendarClock },
-        { id: 'cxc-dashboard', label: 'Cuentas por Cobrar', icon: DollarSign }
+        { id: 'collection-promises', label: 'Compromisos', icon: CalendarClock, roles: ['admin', 'gerente', 'cobros'] },
+        { id: 'cxc-dashboard', label: 'Cuentas por Cobrar', icon: DollarSign, roles: ['admin', 'gerente', 'cobros'] }
       ]
     },
     {
@@ -73,46 +75,49 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       label: 'INVENTARIO',
       icon: Warehouse,
       items: [
-        { id: 'products', label: 'Productos', icon: Package },
+        { id: 'products', label: 'Catálogo de Productos', icon: Package },
         { id: 'dye-matrix', label: 'Tintes / Matriz', icon: Grid3X3, highlight: true },
-        { id: 'inventory', label: 'Existencias & Kardex', icon: Warehouse },
-        { id: 'inventory-lots', label: 'Lotes de Inventario', icon: Layers },
-        { id: 'inventory-analysis', label: 'Análisis de Rotación', icon: Activity }
+        { id: 'inventory', label: 'Existencias & Kardex', icon: Warehouse, roles: ['admin', 'gerente', 'almacen'] },
+        { id: 'inventory-lots', label: 'Lotes de Inventario', icon: Layers, roles: ['admin', 'gerente', 'almacen'] },
+        { id: 'inventory-analysis', label: 'Análisis de Rotación', icon: Activity, roles: ['admin', 'gerente', 'almacen'] }
       ]
     },
     {
       id: 'compras',
       label: 'COMPRAS',
       icon: ShoppingBag,
+      roles: ['admin', 'gerente', 'almacen'],
       items: [
         { id: 'suppliers', label: 'Proveedores', icon: Truck },
         { id: 'purchases', label: 'Compras', icon: ShoppingBag },
-        { id: 'cxp-dashboard', label: 'Cuentas por Pagar', icon: CreditCard }
+        { id: 'cxp-dashboard', label: 'Cuentas por Pagar', icon: CreditCard, roles: ['admin', 'gerente'] }
       ]
     },
     {
       id: 'gastos',
       label: 'GASTOS',
       icon: ReceiptText,
+      roles: ['admin', 'gerente', 'cajero'],
       items: [
-        { id: 'expenses', label: 'Gastos', icon: ReceiptText },
+        { id: 'expenses', label: 'Gastos', icon: ReceiptText, roles: ['admin', 'gerente'] },
         { id: 'cash-register', label: 'Caja Chica', icon: Wallet },
-        { id: 'fixed-expenses', label: 'Pagos Fijos', icon: CalendarDays }
+        { id: 'fixed-expenses', label: 'Pagos Fijos', icon: CalendarDays, roles: ['admin', 'gerente'] }
       ]
     },
     {
       id: 'vendedores',
-      label: 'VENDEDORES',
+      label: user?.role_slug === 'vendedor' ? 'MIS COMISIONES' : 'VENDEDORES',
       icon: UserCheck,
       items: [
-        { id: 'salespeople', label: 'Vendedores', icon: UserCheck },
-        { id: 'commissions', label: 'Comisiones', icon: Percent }
+        { id: 'salespeople', label: 'Fuerza de Ventas', icon: UserCheck, roles: ['admin', 'gerente'] },
+        { id: 'commissions', label: user?.role_slug === 'vendedor' ? 'Mis Comisiones' : 'Comisiones', icon: Percent }
       ]
     },
     {
       id: 'reportes',
       label: 'REPORTES',
       icon: FileSpreadsheet,
+      roles: ['admin', 'gerente'],
       items: [
         { id: 'reports', label: 'Reportes Gerenciales', icon: FileSpreadsheet },
         { id: 'monthly-closing', label: 'Cierre Mensual', icon: Calculator, highlight: true }
@@ -122,6 +127,7 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       id: 'admin',
       label: 'ADMINISTRACIÓN',
       icon: Settings,
+      roles: ['admin', 'gerente'],
       items: [
         { id: 'users', label: 'Usuarios & Roles', icon: KeyRound },
         { id: 'authorizations', label: 'Autorizaciones', icon: ShieldCheck },
@@ -130,6 +136,26 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       ]
     }
   ];
+
+  const userRole = user?.role_slug || 'admin';
+
+  // Filter sections and their items according to user's role
+  const menuSections = allSections
+    .filter(section => {
+      if (section.roles && !section.roles.includes(userRole)) return false;
+      return true;
+    })
+    .map(section => {
+      if (section.items) {
+        const filteredItems = section.items.filter(item => {
+          if (item.roles && !item.roles.includes(userRole)) return false;
+          return true;
+        });
+        return { ...section, items: filteredItems };
+      }
+      return section;
+    })
+    .filter(section => section.single || (section.items && section.items.length > 0));
 
   return (
     <aside className="sidebar" style={{ width: '265px', minWidth: '265px', background: 'var(--bg-sidebar)', borderRight: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>

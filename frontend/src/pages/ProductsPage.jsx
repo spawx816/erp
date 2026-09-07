@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 
-export default function ProductsPage() {
+export default function ProductsPage({ user }) {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
@@ -15,6 +15,8 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({});
+
+  const isVendedor = user?.role_slug === 'vendedor';
 
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -107,8 +109,36 @@ export default function ProductsPage() {
       max_discount_percent: '15',
       description: '',
       initial_warehouse_id: warehouses[0]?.id || '',
-      initial_stock: '10',
+      initial_stock: '0',
       variants: []
+    });
+    setShowModal(true);
+  };
+
+  const handleOpenEdit = (p) => {
+    setModalMode('edit');
+    setEditingId(p.id);
+    setFormData({
+      name: p.name || '',
+      sku: p.sku || '',
+      barcode: p.barcode || '',
+      internal_code: p.internal_code || '',
+      category_id: p.category_id || '',
+      brand_id: p.brand_id || '',
+      unit_id: p.unit_id || '',
+      type: p.type || 'physical',
+      cost: p.cost || '',
+      price: p.price || '',
+      min_price: p.min_price || '',
+      tax_rate: p.tax_rate || '18',
+      stock_min: p.stock_min || '5',
+      stock_max: p.stock_max || '500',
+      allows_discount: p.allows_discount ?? true,
+      max_discount_percent: p.max_discount_percent || '15',
+      description: p.description || '',
+      initial_warehouse_id: '',
+      initial_stock: '0',
+      variants: p.variants || []
     });
     setShowModal(true);
   };
@@ -171,12 +201,14 @@ export default function ProductsPage() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-primary)' }}>Catálogo de Productos & Variantes</h2>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Manejo de referencias, precios, ITBIS y stock</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Manejo de referencias, precios de venta, ITBIS y disponibilidad de stock</p>
         </div>
-        <button onClick={handleOpenCreate} className="btn btn-primary">
-          <Plus size={18} />
-          <span>Nuevo Producto</span>
-        </button>
+        {!isVendedor && (
+          <button onClick={handleOpenCreate} className="btn btn-primary">
+            <Plus size={18} />
+            <span>Nuevo Producto</span>
+          </button>
+        )}
       </div>
 
       {/* Filter / Search Bar */}
@@ -202,8 +234,8 @@ export default function ProductsPage() {
               <th>SKU / Código</th>
               <th>Producto</th>
               <th>Categoría</th>
-              <th>Costo (RD$)</th>
-              <th>Precio (RD$)</th>
+              {!isVendedor && <th>Costo (RD$)</th>}
+              <th>Precio Venta (RD$)</th>
               <th>Existencia Total</th>
               <th>Variantes</th>
               <th>Estado</th>
@@ -212,13 +244,13 @@ export default function ProductsPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="8" style={{ textAlign: 'center', padding: '40px' }}>
+                <td colSpan={isVendedor ? 7 : 8} style={{ textAlign: 'center', padding: '40px' }}>
                   Cargando catálogo...
                 </td>
               </tr>
             ) : products.length === 0 ? (
               <tr>
-                <td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                <td colSpan={isVendedor ? 7 : 8} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   No se encontraron productos en el catálogo.
                 </td>
               </tr>
@@ -236,7 +268,9 @@ export default function ProductsPage() {
                     </span>
                   </td>
                   <td>{p.category_name || '-'}</td>
-                  <td>RD$ {Number(p.cost).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
+                  {!isVendedor && (
+                    <td>RD$ {Number(p.cost).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
+                  )}
                   <td style={{ fontWeight: 700, color: '#38bdf8' }}>
                     RD$ {Number(p.price).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                   </td>

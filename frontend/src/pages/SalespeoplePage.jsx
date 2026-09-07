@@ -7,9 +7,10 @@ import {
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
 
-export default function SalespeoplePage({ initialTab = 'salespeople' }) {
+export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
   const { addToast } = useToast();
-  const [activeTab, setActiveTab] = useState(initialTab); // 'salespeople' | 'commissions'
+  const isVendedor = user?.role_slug === 'vendedor';
+  const [activeTab, setActiveTab] = useState(isVendedor ? 'commissions' : initialTab); // 'salespeople' | 'commissions'
   const [salespeople, setSalespeople] = useState([]);
   const [commissions, setCommissions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -98,46 +99,41 @@ export default function SalespeoplePage({ initialTab = 'salespeople' }) {
 
   const handleToggleSelectCommission = (id) => {
     if (selectedCommissions.includes(id)) {
-      setSelectedCommissions(selectedCommissions.filter(cId => cId !== id));
+      setSelectedCommissions(selectedCommissions.filter(i => i !== id));
     } else {
       setSelectedCommissions([...selectedCommissions, id]);
     }
   };
 
   const handleSelectAllPending = () => {
-    const pendingIds = filteredCommissions.filter(c => c.status === 'pending').map(c => c.id);
-    if (selectedCommissions.length === pendingIds.length) {
-      setSelectedCommissions([]);
-    } else {
-      setSelectedCommissions(pendingIds);
-    }
+    const pendingIds = filteredCommissions
+      .filter(c => c.status === 'pending')
+      .map(c => c.id);
+    setSelectedCommissions(pendingIds);
+  };
+
+  const handleClearSelection = () => {
+    setSelectedCommissions([]);
   };
 
   const handlePayCommissions = async () => {
-    if (selectedCommissions.length === 0) return;
+    if (selectedCommissions.length === 0) {
+      addToast('Seleccione al menos una comisión para pagar.', 'warning');
+      return;
+    }
+
     try {
-      const receiptNo = `REC-COM-${Date.now().toString().slice(-6)}`;
       const res = await api.post('/sales/commissions/pay', {
         commission_ids: selectedCommissions,
-        receipt_number: receiptNo
+        payment_method: 'transfer',
+        notes: 'Pago liquidación de comisiones periódica'
       });
 
       if (res.success) {
-        const paidItems = commissions.filter(c => selectedCommissions.includes(c.id));
-        const totalAmount = paidItems.reduce((sum, it) => sum + Number(it.commission_amount), 0);
-        const spName = paidItems[0]?.salesperson_name || 'Vendedor';
-
-        setGeneratedReceipt({
-          receipt_number: receiptNo,
-          date: new Date().toLocaleDateString('es-DO'),
-          salesperson_name: spName,
-          items: paidItems,
-          total_amount: totalAmount
-        });
-
+        addToast(`Se liquidaron ${res.data.count} comisiones por un total de RD$ ${res.data.total_paid.toLocaleString('es-DO', { minimumFractionDigits: 2 })}`, 'success');
+        setGeneratedReceipt(res.data);
         setShowReceiptModal(true);
         setSelectedCommissions([]);
-        addToast('Comisiones liquidadas y recibo generado.', 'success');
         loadData();
       }
     } catch (err) {
@@ -202,43 +198,49 @@ export default function SalespeoplePage({ initialTab = 'salespeople' }) {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-                Fuerza de Ventas & Comisiones
+                {isVendedor ? 'Mis Comisiones de Venta' : 'Fuerza de Ventas & Comisiones'}
               </h2>
-              <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.4)' }}>
-                Sección 8 & 27
+              <span className="badge badge-success" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.4)' }}>
+                {isVendedor ? 'Comercial' : 'Sección 8 & 27'}
               </span>
             </div>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-              Gestión de vendedores, asignación permanente de clientes, metas mensuales y liquidación de comisiones
+              {isVendedor
+                ? 'Historial de comisiones generadas, estado de liquidación y facturas asociadas'
+                : 'Gestión de vendedores, asignación permanente de clientes, metas mensuales y liquidación de comisiones'}
             </p>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={() => setShowNewModal(true)} className="btn btn-primary">
-            <Plus size={16} />
-            <span>Nuevo Vendedor</span>
-          </button>
-        </div>
+        {!isVendedor && (
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={() => setShowNewModal(true)} className="btn btn-primary">
+              <Plus size={16} />
+              <span>Nuevo Vendedor</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
-        <button
-          onClick={() => setActiveTab('salespeople')}
-          className={`btn btn-sm ${activeTab === 'salespeople' ? 'btn-primary' : 'btn-secondary'}`}
-        >
-          <UserCheck size={16} />
-          <span>Vendedores & Metas ({salespeople.length})</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('commissions')}
-          className={`btn btn-sm ${activeTab === 'commissions' ? 'btn-primary' : 'btn-secondary'}`}
-        >
-          <Percent size={16} />
-          <span>Liquidación de Comisiones ({commissions.length})</span>
-        </button>
-      </div>
+      {!isVendedor && (
+        <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+          <button
+            onClick={() => setActiveTab('salespeople')}
+            className={`btn btn-sm ${activeTab === 'salespeople' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            <UserCheck size={16} />
+            <span>Vendedores & Metas ({salespeople.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('commissions')}
+            className={`btn btn-sm ${activeTab === 'commissions' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            <Percent size={16} />
+            <span>Liquidación de Comisiones ({commissions.length})</span>
+          </button>
+        </div>
+      )}
 
       {/* TAB 1: VENDEDORES */}
       {activeTab === 'salespeople' && (

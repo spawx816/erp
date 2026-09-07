@@ -8,10 +8,12 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 
-export default function DashboardPage({ activeBranch, onNavigate }) {
+export default function DashboardPage({ user, activeBranch, onNavigate }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('month'); // 'today' | 'week' | 'month' | 'year'
+
+  const isVendedor = user?.role_slug === 'vendedor';
 
   useEffect(() => {
     loadDashboard();
@@ -64,15 +66,15 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-              Panel de Control Ejecutivo Nexus ERP
+              {isVendedor ? `Portal Comercial • ${user?.first_name || 'Vendedor'}` : 'Panel de Control Ejecutivo Nexus ERP'}
             </h2>
             <span className="badge badge-success" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
               <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }} />
-              En Tiempo Real
+              {isVendedor ? 'Objetivos Activos' : 'En Tiempo Real'}
             </span>
           </div>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-            {activeBranch ? activeBranch.name : 'Todas las Sucursales'} • República Dominicana (RD$) • DGII NCF
+            {activeBranch ? activeBranch.name : 'Todas las Sucursales'} • República Dominicana (RD$) {isVendedor ? '• Seguimiento de Metas y Clientes' : '• DGII NCF'}
           </p>
         </div>
 
@@ -103,62 +105,64 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
         </div>
       </div>
 
-      {/* ALERT BANNERS (Clickable) */}
+      {/* ALERT BANNERS (Only show relevant alerts for admin or general stock alerts for seller) */}
       {alerts && alerts.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {alerts.map(alt => {
-            const isCritical = alt.severity === 'critical';
-            const isWarning = alt.severity === 'warning';
-            const bg = isCritical ? 'rgba(239, 68, 68, 0.12)' : isWarning ? 'rgba(245, 158, 11, 0.12)' : 'rgba(59, 130, 246, 0.12)';
-            const border = isCritical ? 'rgba(239, 68, 68, 0.3)' : isWarning ? 'rgba(245, 158, 11, 0.3)' : 'rgba(59, 130, 246, 0.3)';
-            const color = isCritical ? '#ef4444' : isWarning ? '#f59e0b' : '#3b82f6';
+          {alerts
+            .filter(alt => !isVendedor || (alt.link === 'inventory' || alt.link === 'products'))
+            .map(alt => {
+              const isCritical = alt.severity === 'critical';
+              const isWarning = alt.severity === 'warning';
+              const bg = isCritical ? 'rgba(239, 68, 68, 0.12)' : isWarning ? 'rgba(245, 158, 11, 0.12)' : 'rgba(59, 130, 246, 0.12)';
+              const border = isCritical ? 'rgba(239, 68, 68, 0.3)' : isWarning ? 'rgba(245, 158, 11, 0.3)' : 'rgba(59, 130, 246, 0.3)';
+              const color = isCritical ? '#ef4444' : isWarning ? '#f59e0b' : '#3b82f6';
 
-            return (
-              <div
-                key={alt.id}
-                onClick={() => {
-                  if (alt.link === 'cxc' || alt.link === 'collections') onNavigate('cxc-dashboard');
-                  else if (alt.link === 'credit-risk' || alt.link === 'credit_risk' || alt.link === 'customers') onNavigate('credit-risk');
-                  else if (alt.link === 'inventory' || alt.link === 'inventory-analysis' || alt.link === 'products') onNavigate('inventory');
-                  else if (alt.link === 'fixed_expenses' || alt.link === 'fixed-expenses' || alt.link === 'expenses') onNavigate('fixed-expenses');
-                  else if (alt.link) onNavigate(alt.link);
-                  else onNavigate('dashboard');
-                }}
-                style={{
-                  background: bg,
-                  border: `1px solid ${border}`,
-                  borderRadius: '12px',
-                  padding: '12px 18px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  cursor: 'pointer',
-                  transition: 'transform 0.15s ease'
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateX(4px)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <ShieldAlert size={20} color={color} />
-                  <div>
-                    <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.88rem' }}>{alt.title}</span>
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>{alt.description}</p>
+              return (
+                <div
+                  key={alt.id}
+                  onClick={() => {
+                    if (alt.link === 'cxc' || alt.link === 'collections') onNavigate('collections');
+                    else if (alt.link === 'credit-risk' || alt.link === 'credit_risk' || alt.link === 'customers') onNavigate('customers');
+                    else if (alt.link === 'inventory' || alt.link === 'inventory-analysis' || alt.link === 'products') onNavigate('products');
+                    else if (alt.link === 'fixed_expenses' || alt.link === 'fixed-expenses' || alt.link === 'expenses') onNavigate(isVendedor ? 'dashboard' : 'fixed-expenses');
+                    else if (alt.link) onNavigate(alt.link);
+                    else onNavigate('dashboard');
+                  }}
+                  style={{
+                    background: bg,
+                    border: `1px solid ${border}`,
+                    borderRadius: '12px',
+                    padding: '12px 18px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    cursor: 'pointer',
+                    transition: 'transform 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateX(4px)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <ShieldAlert size={20} color={color} />
+                    <div>
+                      <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.88rem' }}>{alt.title}</span>
+                      <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>{alt.description}</p>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.78rem', color, fontWeight: 700 }}>
+                    <span>Ver</span>
+                    <ChevronRight size={15} />
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.78rem', color, fontWeight: 700 }}>
-                  <span>Resolver</span>
-                  <ChevronRight size={15} />
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
         </div>
       )}
 
-      {/* 12 EXECUTIVE & OPERATIONAL KPIS */}
+      {/* KPIS GRID */}
       <div>
         <h3 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px' }}>
-          Indicadores Clave del Negocio (12 KPIs)
+          {isVendedor ? 'Métricas de Desempeño Comercial' : 'Indicadores Clave del Negocio (12 KPIs)'}
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
           {/* KPI 1: Ventas Hoy */}
@@ -233,97 +237,140 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
             </div>
           </div>
 
-          {/* KPI 5: Cartera CxC Total */}
-          <div className="card" onClick={() => onNavigate('cxc-dashboard')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cartera CxC Total</span>
-                <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#f59e0b', marginTop: '4px' }}>
-                  RD$ {Number(kpis.receivables_total || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                </h4>
-                <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  {kpis.receivables_count || 0} facturas por cobrar
-                </p>
+          {/* If Vendedor: Show Meta and Comisiones */}
+          {isVendedor ? (
+            <>
+              {/* KPI Vendedor: Comisiones Est. */}
+              <div className="card" onClick={() => onNavigate('commissions')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Comisiones Estimadas</span>
+                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--success)', marginTop: '4px' }}>
+                      RD$ {Number((kpis.sales_month || 0) * 0.05).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </h4>
+                    <p style={{ fontSize: '0.72rem', color: '#10b981', marginTop: '4px' }}>
+                      5.0% tasa estándar
+                    </p>
+                  </div>
+                  <div style={{ padding: '8px', background: 'rgba(16, 185, 129, 0.15)', borderRadius: '10px' }}>
+                    <Percent size={18} color="var(--success)" />
+                  </div>
+                </div>
               </div>
-              <div style={{ padding: '8px', background: 'rgba(245, 158, 11, 0.15)', borderRadius: '10px' }}>
-                <Clock size={18} color="var(--warning)" />
-              </div>
-            </div>
-          </div>
 
-          {/* KPI 6: Facturas Vencidas */}
-          <div className="card" onClick={() => onNavigate('cxc-dashboard')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cartera Vencida</span>
-                <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.receivables_overdue || 0) > 0 ? '#ef4444' : 'var(--text-primary)', marginTop: '4px' }}>
-                  RD$ {Number(kpis.receivables_overdue || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                </h4>
-                <p style={{ fontSize: '0.72rem', color: 'var(--danger)', marginTop: '4px' }}>
-                  {kpis.receivables_overdue_count || 0} facturas vencidas
-                </p>
+              {/* KPI Vendedor: Meta Mensual */}
+              <div className="card" style={{ padding: '16px 18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Meta Comercial Mes</span>
+                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
+                      RD$ 350,000.00
+                    </h4>
+                    <p style={{ fontSize: '0.72rem', color: '#60a5fa', marginTop: '4px' }}>
+                      {Math.min(100, Math.round(((kpis.sales_month || 0) / 350000) * 100))}% alcanzado
+                    </p>
+                  </div>
+                  <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.15)', borderRadius: '10px' }}>
+                    <Target size={18} color="var(--accent-primary)" />
+                  </div>
+                </div>
               </div>
-              <div style={{ padding: '8px', background: 'rgba(239, 68, 68, 0.15)', borderRadius: '10px' }}>
-                <AlertCircle size={18} color="var(--danger)" />
+            </>
+          ) : (
+            <>
+              {/* KPI 5: Cartera CxC Total */}
+              <div className="card" onClick={() => onNavigate('cxc-dashboard')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cartera CxC Total</span>
+                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#f59e0b', marginTop: '4px' }}>
+                      RD$ {Number(kpis.receivables_total || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </h4>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      {kpis.receivables_count || 0} facturas por cobrar
+                    </p>
+                  </div>
+                  <div style={{ padding: '8px', background: 'rgba(245, 158, 11, 0.15)', borderRadius: '10px' }}>
+                    <Clock size={18} color="var(--warning)" />
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* KPI 7: Valoración Inventario */}
-          <div className="card" onClick={() => onNavigate('inventory')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Valor Inventario</span>
-                <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                  RD$ {Number(kpis.inventory_valuation || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                </h4>
-                <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  Costo de reposición
-                </p>
+              {/* KPI 6: Facturas Vencidas */}
+              <div className="card" onClick={() => onNavigate('cxc-dashboard')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cartera Vencida</span>
+                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.receivables_overdue || 0) > 0 ? '#ef4444' : 'var(--text-primary)', marginTop: '4px' }}>
+                      RD$ {Number(kpis.receivables_overdue || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </h4>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--danger)', marginTop: '4px' }}>
+                      {kpis.receivables_overdue_count || 0} facturas vencidas
+                    </p>
+                  </div>
+                  <div style={{ padding: '8px', background: 'rgba(239, 68, 68, 0.15)', borderRadius: '10px' }}>
+                    <AlertCircle size={18} color="var(--danger)" />
+                  </div>
+                </div>
               </div>
-              <div style={{ padding: '8px', background: 'rgba(139, 92, 246, 0.15)', borderRadius: '10px' }}>
-                <Package size={18} color="#a78bfa" />
-              </div>
-            </div>
-          </div>
 
-          {/* KPI 8: Gastos del Mes */}
-          <div className="card" onClick={() => onNavigate('expenses')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Gastos Operativos</span>
-                <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#f59e0b', marginTop: '4px' }}>
-                  RD$ {Number(kpis.expenses_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                </h4>
-                <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  Caja chica & fijos
-                </p>
+              {/* KPI 7: Valoración Inventario */}
+              <div className="card" onClick={() => onNavigate('inventory')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Valor Inventario</span>
+                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
+                      RD$ {Number(kpis.inventory_valuation || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </h4>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Costo de reposición
+                    </p>
+                  </div>
+                  <div style={{ padding: '8px', background: 'rgba(139, 92, 246, 0.15)', borderRadius: '10px' }}>
+                    <Package size={18} color="#a78bfa" />
+                  </div>
+                </div>
               </div>
-              <div style={{ padding: '8px', background: 'rgba(245, 158, 11, 0.15)', borderRadius: '10px' }}>
-                <Activity size={18} color="#f59e0b" />
-              </div>
-            </div>
-          </div>
 
-          {/* KPI 9: Ganancia Estimada */}
-          <div className="card" onClick={() => onNavigate('reports')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Ganancia Neta Est.</span>
-                <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.estimated_profit_month || 0) >= 0 ? 'var(--success)' : 'var(--danger)', marginTop: '4px' }}>
-                  RD$ {Number(kpis.estimated_profit_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                </h4>
-                <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  Margen bruto menos gastos
-                </p>
+              {/* KPI 8: Gastos del Mes */}
+              <div className="card" onClick={() => onNavigate('expenses')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Gastos Operativos</span>
+                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#f59e0b', marginTop: '4px' }}>
+                      RD$ {Number(kpis.expenses_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </h4>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Caja chica & fijos
+                    </p>
+                  </div>
+                  <div style={{ padding: '8px', background: 'rgba(245, 158, 11, 0.15)', borderRadius: '10px' }}>
+                    <Activity size={18} color="#f59e0b" />
+                  </div>
+                </div>
               </div>
-              <div style={{ padding: '8px', background: 'rgba(16, 185, 129, 0.15)', borderRadius: '10px' }}>
-                <ArrowUpRight size={18} color="var(--success)" />
-              </div>
-            </div>
-          </div>
 
-          {/* KPI 10: Facturas Pendientes */}
+              {/* KPI 9: Ganancia Estimada */}
+              <div className="card" onClick={() => onNavigate('reports')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Ganancia Neta Est.</span>
+                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.estimated_profit_month || 0) >= 0 ? 'var(--success)' : 'var(--danger)', marginTop: '4px' }}>
+                      RD$ {Number(kpis.estimated_profit_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </h4>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Margen bruto menos gastos
+                    </p>
+                  </div>
+                  <div style={{ padding: '8px', background: 'rgba(16, 185, 129, 0.15)', borderRadius: '10px' }}>
+                    <ArrowUpRight size={18} color="var(--success)" />
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* KPI: Facturas Pendientes */}
           <div className="card" onClick={() => onNavigate('sales')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
@@ -341,7 +388,7 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
             </div>
           </div>
 
-          {/* KPI 11: Clientes Activos */}
+          {/* KPI: Clientes Activos */}
           <div className="card" onClick={() => onNavigate('customers')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
@@ -359,8 +406,8 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
             </div>
           </div>
 
-          {/* KPI 12: Quiebre de Stock */}
-          <div className="card" onClick={() => onNavigate('inventory')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+          {/* KPI: Quiebre de Stock (Stock Alert) */}
+          <div className="card" onClick={() => onNavigate('products')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Alertas de Stock</span>
@@ -379,10 +426,10 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
         </div>
       </div>
 
-      {/* 9 VISUAL CHARTS & ANALYTICS GRIDS */}
+      {/* VISUAL CHARTS & ANALYTICS GRIDS */}
       <div>
         <h3 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px' }}>
-          Visualizaciones Analíticas (9 Gráficos)
+          {isVendedor ? 'Gráficos de Ventas y Productos' : 'Visualizaciones Analíticas (9 Gráficos)'}
         </h3>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))', gap: '20px' }}>
@@ -456,44 +503,46 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
             </div>
           </div>
 
-          {/* Chart 3: Antigüedad de Saldos CxC (Semáforo 0-30, 31-60, 61-90, 91-120, +120) */}
-          <div className="card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div>
-                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>3. Antigüedad de Saldos CxC (Semáforo)</h4>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Clasificación de riesgo de cartera por días vencidos</p>
+          {/* Chart 3: Antigüedad de Saldos CxC (Hidden for Vendedor) */}
+          {!isVendedor && (
+            <div className="card" style={{ padding: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <div>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>3. Antigüedad de Saldos CxC (Semáforo)</h4>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Clasificación de riesgo de cartera por días vencidos</p>
+                </div>
+                <Clock size={18} color="#f59e0b" />
               </div>
-              <Clock size={18} color="#f59e0b" />
-            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', textAlign: 'center' }}>
-              {[
-                { label: '0-30 Días', key: 'bracket_0_30', color: '#10b981', desc: 'Corriente' },
-                { label: '31-60 Días', key: 'bracket_31_60', color: '#3b82f6', desc: 'Atención' },
-                { label: '61-90 Días', key: 'bracket_61_90', color: '#f59e0b', desc: 'Riesgo' },
-                { label: '91-120 Días', key: 'bracket_91_120', color: '#ea580c', desc: 'Crítico' },
-                { label: '+120 Días', key: 'bracket_120_plus', color: '#ef4444', desc: 'Legal' }
-              ].map(b => {
-                const amount = charts.cxc_aging ? Number(charts.cxc_aging[b.key] || 0) : 0;
-                return (
-                  <div key={b.key} style={{ padding: '12px 6px', background: 'var(--bg-card)', borderRadius: '10px', border: `1px solid ${b.color}40` }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: b.color, margin: '0 auto 6px', boxShadow: `0 0 8px ${b.color}` }} />
-                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'block' }}>{b.label}</span>
-                    <p style={{ fontSize: '0.85rem', fontWeight: 800, color: b.color, marginTop: '4px' }}>
-                      RD$ {(amount / 1000).toFixed(0)}k
-                    </p>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{b.desc}</span>
-                  </div>
-                );
-              })}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', textAlign: 'center' }}>
+                {[
+                  { label: '0-30 Días', key: 'bracket_0_30', color: '#10b981', desc: 'Corriente' },
+                  { label: '31-60 Días', key: 'bracket_31_60', color: '#3b82f6', desc: 'Atención' },
+                  { label: '61-90 Días', key: 'bracket_61_90', color: '#f59e0b', desc: 'Riesgo' },
+                  { label: '91-120 Días', key: 'bracket_91_120', color: '#ea580c', desc: 'Crítico' },
+                  { label: '+120 Días', key: 'bracket_120_plus', color: '#ef4444', desc: 'Legal' }
+                ].map(b => {
+                  const amount = charts.cxc_aging ? Number(charts.cxc_aging[b.key] || 0) : 0;
+                  return (
+                    <div key={b.key} style={{ padding: '12px 6px', background: 'var(--bg-card)', borderRadius: '10px', border: `1px solid ${b.color}40` }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: b.color, margin: '0 auto 6px', boxShadow: `0 0 8px ${b.color}` }} />
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'block' }}>{b.label}</span>
+                      <p style={{ fontSize: '0.85rem', fontWeight: 800, color: b.color, marginTop: '4px' }}>
+                        RD$ {(amount / 1000).toFixed(0)}k
+                      </p>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{b.desc}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Chart 4: Ventas por Vendedor (Ranking) */}
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
-                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>4. Ranking de Fuerza de Ventas</h4>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>{isVendedor ? 'Tabla de Posiciones Comercial' : '4. Ranking de Fuerza de Ventas'}</h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Desempeño mensual de vendedores</p>
               </div>
               <Users size={18} color="#a78bfa" />
@@ -523,7 +572,7 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
-                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>5. Ventas por Categoría de Producto</h4>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Ventas por Categoría de Producto</h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Líneas cosméticas, tintes y cuidado capilar</p>
               </div>
               <Layers size={18} color="#ec4899" />
@@ -541,33 +590,35 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
             </div>
           </div>
 
-          {/* Chart 6: Gastos por Categoría */}
-          <div className="card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div>
-                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>6. Gastos Operativos por Rubro</h4>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Distribución de costos fijos y variables</p>
-              </div>
-              <Activity size={18} color="#f59e0b" />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {charts.expenses_by_category?.map((exp, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{exp.name}</span>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#f59e0b' }}>
-                    RD$ {Number(exp.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                  </span>
+          {/* Chart 6: Gastos por Categoría (Hidden for Vendedor) */}
+          {!isVendedor && (
+            <div className="card" style={{ padding: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <div>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>6. Gastos Operativos por Rubro</h4>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Distribución de costos fijos y variables</p>
                 </div>
-              ))}
+                <Activity size={18} color="#f59e0b" />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {charts.expenses_by_category?.map((exp, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{exp.name}</span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#f59e0b' }}>
+                      RD$ {Number(exp.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Chart 7: Top 6 Productos Más Vendidos */}
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
-                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>7. Top Productos Líderes</h4>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Top Productos Líderes</h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Artículos con mayor facturación</p>
               </div>
               <Package size={18} color="#38bdf8" />
@@ -592,7 +643,7 @@ export default function DashboardPage({ activeBranch, onNavigate }) {
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
-                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>8. Top Clientes (Mayor Facturación)</h4>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Top Clientes (Mayor Facturación)</h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Salones y centros de estética destacados</p>
               </div>
               <Building2 size={18} color="#10b981" />
