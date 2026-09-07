@@ -1,10 +1,31 @@
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
+const fs = require('fs');
 const dbType = process.env.DB_TYPE || 'postgres';
 
-// Initialize database schema and initial seeders only if SQLite
-if (dbType === 'sqlite') {
+// Auto-initialize database
+if (dbType === 'postgres') {
+  (async () => {
+    try {
+      const { pool } = require('./database/pgDb');
+      await pool.query('SELECT 1');
+      console.log('🐘 PostgreSQL connected successfully.');
+
+      const check = await pool.query("SELECT to_regclass('public.users') as exists");
+      if (!check.rows[0].exists) {
+        console.log('🌱 Tablas no encontradas. Inicializando esquema y datos iniciales en PostgreSQL...');
+        const sqlPath = path.resolve(__dirname, './database/nexus_erp_postgres.sql');
+        if (fs.existsSync(sqlPath)) {
+          const sql = fs.readFileSync(sqlPath, 'utf8');
+          await pool.query(sql);
+          console.log('✅ Esquema y usuarios demo creados exitosamente en PostgreSQL!');
+        }
+      }
+    } catch (err) {
+      console.error('⚠️ Error conectando o inicializando PostgreSQL:', err.message);
+    }
+  })();
+} else {
   try {
     const { initSchema } = require('./database/schema');
     const { runSeed } = require('./database/seeder');
