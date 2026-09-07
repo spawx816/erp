@@ -22,6 +22,13 @@ fi
 
 npm install --production
 
+# Importar esquema y dataset completo si PostgreSQL está listo
+if command -v psql &> /dev/null; then
+    echo "🐘 Sincronizando dataset completo en PostgreSQL..."
+    PGPASSWORD='NuevaPasswordSegura' psql -U educrm_user -d nexus_erp -h localhost -f src/database/nexus_erp_postgres.sql 2>/dev/null || true
+    PGPASSWORD='NuevaPasswordSegura' psql -U educrm_user -d nexus_erp -h localhost -f src/database/nexus_erp_full_seed.sql 2>/dev/null || true
+fi
+
 # Iniciar o recargar con PM2 en puerto 5005
 if command -v pm2 &> /dev/null; then
     pm2 delete nexus-erp 2>/dev/null || true

@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 const dbType = process.env.DB_TYPE || 'postgres';
 
 // Auto-initialize database
@@ -11,14 +12,16 @@ if (dbType === 'postgres') {
       await pool.query('SELECT 1');
       console.log('🐘 PostgreSQL connected successfully.');
 
-      const check = await pool.query("SELECT to_regclass('public.users') as exists");
+      const check = await pool.query("SELECT to_regclass('public.products') as exists");
       if (!check.rows[0].exists) {
-        console.log('🌱 Tablas no encontradas. Inicializando esquema y datos iniciales en PostgreSQL...');
-        const sqlPath = path.resolve(__dirname, './database/nexus_erp_postgres.sql');
-        if (fs.existsSync(sqlPath)) {
-          const sql = fs.readFileSync(sqlPath, 'utf8');
+        console.log('🌱 Inicializando dataset completo en PostgreSQL...');
+        const sqlPath = path.resolve(__dirname, './database/nexus_erp_full_seed.sql');
+        const fallbackPath = path.resolve(__dirname, './database/nexus_erp_postgres.sql');
+        const targetPath = fs.existsSync(sqlPath) ? sqlPath : fallbackPath;
+        if (fs.existsSync(targetPath)) {
+          const sql = fs.readFileSync(targetPath, 'utf8');
           await pool.query(sql);
-          console.log('✅ Esquema y usuarios demo creados exitosamente en PostgreSQL!');
+          console.log('✅ Esquema y dataset completo cargados en PostgreSQL!');
         }
       }
     } catch (err) {
