@@ -25,8 +25,9 @@ npm install --production
 # Importar esquema y dataset completo si PostgreSQL está listo
 if command -v psql &> /dev/null; then
     echo "🐘 Sincronizando dataset completo en PostgreSQL..."
-    PGPASSWORD="${DB_PASSWORD:-NuevaPasswordSegura}" psql -U "${DB_USER:-educrm_user}" -d "${DB_NAME:-nexus_erp}" -h "${DB_HOST:-127.0.0.1}" -f src/database/nexus_erp_postgres.sql || true
-    PGPASSWORD="${DB_PASSWORD:-NuevaPasswordSegura}" psql -U "${DB_USER:-educrm_user}" -d "${DB_NAME:-nexus_erp}" -h "${DB_HOST:-127.0.0.1}" -f src/database/nexus_erp_full_seed.sql || true
+    PGPASSWORD="${DB_PASSWORD:-NuevaPasswordSegura}" psql -U "${DB_USER:-educrm_user}" -d "${DB_NAME:-nexus_erp}" -h "${DB_HOST:-127.0.0.1}" -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO educrm_user; GRANT ALL ON SCHEMA public TO public;" || true
+    PGPASSWORD="${DB_PASSWORD:-NuevaPasswordSegura}" psql -U "${DB_USER:-educrm_user}" -d "${DB_NAME:-nexus_erp}" -h "${DB_HOST:-127.0.0.1}" -f src/database/nexus_erp_postgres.sql
+    PGPASSWORD="${DB_PASSWORD:-NuevaPasswordSegura}" psql -U "${DB_USER:-educrm_user}" -d "${DB_NAME:-nexus_erp}" -h "${DB_HOST:-127.0.0.1}" -f src/database/nexus_erp_full_seed.sql
 fi
 
 # Iniciar o recargar con PM2 en puerto 5005
