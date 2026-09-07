@@ -3,7 +3,7 @@ const { logAudit } = require('../../middlewares/audit');
 
 const catalogController = {
   // PRODUCTS
-  getProducts: (req, res) => {
+  getProducts: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { search, category_id, brand_id, type, status, warehouse_id, branch_id, page = 1, limit = 25 } = req.query;
@@ -36,7 +36,7 @@ const catalogController = {
       const whereSQL = whereClauses.join(' AND ');
 
       // Total count
-      const countRow = db.prepare(`SELECT COUNT(*) as total FROM products p WHERE ${whereSQL}`).get(...params);
+      const countRow = await db.prepare(`SELECT COUNT(*) as total FROM products p WHERE ${whereSQL}`).get(...params);
 
       const parsedWhId = warehouse_id ? parseInt(warehouse_id, 10) : null;
       const parsedBrId = branch_id ? parseInt(branch_id, 10) : null;
@@ -48,7 +48,7 @@ const catalogController = {
         : `(SELECT COALESCE(SUM(inv.quantity), 0) FROM inventories inv WHERE inv.product_id = p.id)`;
 
       // Query products
-      const products = db.prepare(`
+      const products = await db.prepare(`
         SELECT p.*,
                c.name as category_name,
                b.name as brand_name,
@@ -65,7 +65,7 @@ const catalogController = {
       `).all(...params, limit, offset);
 
       // Attach variants to products
-      const getVariants = db.prepare(`SELECT * FROM product_variants WHERE product_id = ?`);
+      const getVariants = await db.prepare(`SELECT * FROM product_variants WHERE product_id = ?`);
       products.forEach(prod => {
         prod.variants = getVariants.all(prod.id);
       });
@@ -85,12 +85,12 @@ const catalogController = {
     }
   },
 
-  getProductById: (req, res) => {
+  getProductById: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
 
-      const product = db.prepare(`
+      const product = await db.prepare(`
         SELECT p.*,
                c.name as category_name,
                b.name as brand_name,
@@ -106,8 +106,8 @@ const catalogController = {
         return res.status(404).json({ success: false, message: 'Producto no encontrado.' });
       }
 
-      product.variants = db.prepare('SELECT * FROM product_variants WHERE product_id = ?').all(product.id);
-      product.stock_by_warehouse = db.prepare(`
+      product.variants = await db.prepare('SELECT * FROM product_variants WHERE product_id = ?').all(product.id);
+      product.stock_by_warehouse = await db.prepare(`
         SELECT inv.*, w.name as warehouse_name, br.name as branch_name, pv.variant_name
         FROM inventories inv
         JOIN warehouses w ON inv.warehouse_id = w.id
@@ -122,13 +122,13 @@ const catalogController = {
     }
   },
 
-  lookupBarcode: (req, res) => {
+  lookupBarcode: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { barcode } = req.params;
 
       // Check variant first
-      const variant = db.prepare(`
+      const variant = await db.prepare(`
         SELECT pv.*, p.name as product_name, p.tax_rate, p.type, p.allows_discount, p.max_discount_percent
         FROM product_variants pv
         JOIN products p ON pv.product_id = p.id
@@ -144,7 +144,7 @@ const catalogController = {
       }
 
       // Check direct product
-      const product = db.prepare(`
+      const product = await db.prepare(`
         SELECT p.*, c.name as category_name
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
@@ -152,7 +152,7 @@ const catalogController = {
       `).get(barcode, barcode, barcode, companyId);
 
       if (product) {
-        product.variants = db.prepare('SELECT * FROM product_variants WHERE product_id = ?').all(product.id);
+        product.variants = await db.prepare('SELECT * FROM product_variants WHERE product_id = ?').all(product.id);
         return res.json({
           success: true,
           type: 'product',
@@ -166,7 +166,7 @@ const catalogController = {
     }
   },
 
-  createProduct: (req, res) => {
+  createProduct: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const {
@@ -181,13 +181,13 @@ const catalogController = {
         return res.status(400).json({ success: false, message: 'Nombre y SKU son requeridos.' });
       }
 
-      const existing = db.prepare('SELECT id FROM products WHERE company_id = ? AND sku = ?').get(companyId, sku);
+      const existing = await db.prepare('SELECT id FROM products WHERE company_id = ? AND sku = ?').get(companyId, sku);
       if (existing) {
         return res.status(400).json({ success: false, message: `Ya existe un producto con el SKU: ${sku}` });
       }
 
-      const newProduct = runTransaction(() => {
-        const stmt = db.prepare(`
+      const newProduct = await runTransaction(async () => {
+        const stmt = await db.prepare(`
           INSERT INTO products (
             company_id, category_id, brand_id, unit_id, internal_code, sku, barcode,
             name, description, type, cost, price, min_price, tax_rate,
@@ -195,7 +195,7 @@ const catalogController = {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        const resInsert = stmt.run(
+        const resInsert = await stmt.run(
           companyId, category_id || null, brand_id || null, unit_id || null,
           internal_code || null, sku, barcode || null, name, description || null,
           type, cost, price, min_price, tax_rate,
@@ -206,7 +206,7 @@ const catalogController = {
 
         // Insert variants if supplied
         if (variants && variants.length > 0) {
-          const stmtVar = db.prepare(`
+          const stmtVar = await db.prepare(`
             INSERT INTO product_variants (product_id, variant_name, sku, barcode, cost, price)
             VALUES (?, ?, ?, ?, ?, ?)
           `);
@@ -217,14 +217,14 @@ const catalogController = {
 
         // If initial stock provided
         if (type === 'physical' && initial_warehouse_id && Number(initial_stock) > 0) {
-          const warehouse = db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(initial_warehouse_id);
+          const warehouse = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(initial_warehouse_id);
           if (warehouse) {
-            db.prepare(`
+            await db.prepare(`
               INSERT INTO inventories (company_id, branch_id, warehouse_id, product_id, quantity)
               VALUES (?, ?, ?, ?, ?)
             `).run(companyId, warehouse.branch_id, initial_warehouse_id, productId, initial_stock);
 
-            db.prepare(`
+            await db.prepare(`
               INSERT INTO inventory_movements (
                 company_id, branch_id, warehouse_id, product_id, user_id, movement_type,
                 previous_quantity, quantity, new_quantity, unit_cost, total_cost, reference_type, reason
@@ -256,7 +256,7 @@ const catalogController = {
     }
   },
 
-  updateProduct: (req, res) => {
+  updateProduct: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
@@ -266,12 +266,12 @@ const catalogController = {
         stock_min, stock_max, allows_discount, max_discount_percent, status
       } = req.body;
 
-      const current = db.prepare('SELECT * FROM products WHERE id = ? AND company_id = ?').get(id, companyId);
+      const current = await db.prepare('SELECT * FROM products WHERE id = ? AND company_id = ?').get(id, companyId);
       if (!current) {
         return res.status(404).json({ success: false, message: 'Producto no encontrado.' });
       }
 
-      db.prepare(`
+      await db.prepare(`
         UPDATE products SET
           name = COALESCE(?, name),
           barcode = COALESCE(?, barcode),
@@ -318,21 +318,21 @@ const catalogController = {
   },
 
   // CATEGORIES
-  getCategories: (req, res) => {
+  getCategories: async (req, res) => {
     try {
-      const categories = db.prepare('SELECT * FROM categories WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
+      const categories = await db.prepare('SELECT * FROM categories WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
       return res.json({ success: true, data: categories });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  createCategory: (req, res) => {
+  createCategory: async (req, res) => {
     try {
       const { name, description } = req.body;
       if (!name) return res.status(400).json({ success: false, message: 'Nombre requerido.' });
-      const stmt = db.prepare('INSERT INTO categories (company_id, name, description) VALUES (?, ?, ?)');
-      const result = stmt.run(req.user.company_id, name, description || null);
+      const stmt = await db.prepare('INSERT INTO categories (company_id, name, description) VALUES (?, ?, ?)');
+      const result = await stmt.run(req.user.company_id, name, description || null);
       return res.json({ success: true, data: { id: result.lastInsertRowid, name } });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -340,21 +340,21 @@ const catalogController = {
   },
 
   // BRANDS
-  getBrands: (req, res) => {
+  getBrands: async (req, res) => {
     try {
-      const brands = db.prepare('SELECT * FROM brands WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
+      const brands = await db.prepare('SELECT * FROM brands WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
       return res.json({ success: true, data: brands });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  createBrand: (req, res) => {
+  createBrand: async (req, res) => {
     try {
       const { name } = req.body;
       if (!name) return res.status(400).json({ success: false, message: 'Nombre requerido.' });
-      const stmt = db.prepare('INSERT INTO brands (company_id, name) VALUES (?, ?)');
-      const result = stmt.run(req.user.company_id, name);
+      const stmt = await db.prepare('INSERT INTO brands (company_id, name) VALUES (?, ?)');
+      const result = await stmt.run(req.user.company_id, name);
       return res.json({ success: true, data: { id: result.lastInsertRowid, name } });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -362,9 +362,9 @@ const catalogController = {
   },
 
   // UNITS
-  getUnits: (req, res) => {
+  getUnits: async (req, res) => {
     try {
-      const units = db.prepare('SELECT * FROM units WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
+      const units = await db.prepare('SELECT * FROM units WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
       return res.json({ success: true, data: units });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -372,9 +372,9 @@ const catalogController = {
   },
 
   // PRICE LISTS
-  getPriceLists: (req, res) => {
+  getPriceLists: async (req, res) => {
     try {
-      const lists = db.prepare('SELECT * FROM price_lists WHERE company_id = ? ORDER BY id ASC').all(req.user.company_id);
+      const lists = await db.prepare('SELECT * FROM price_lists WHERE company_id = ? ORDER BY id ASC').all(req.user.company_id);
       return res.json({ success: true, data: lists });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -382,7 +382,7 @@ const catalogController = {
   },
 
   // DYE MATRIX (Matriz de tonos por numeración con semáforos)
-  getDyeMatrix: (req, res) => {
+  getDyeMatrix: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { line, brand_id, warehouse_id, branch_id } = req.query;
@@ -408,7 +408,7 @@ const catalogController = {
         ? `(SELECT COALESCE(SUM(inv.quantity), 0) FROM inventories inv WHERE inv.product_id = p.id AND inv.branch_id = ${parsedBrId})`
         : `(SELECT COALESCE(SUM(inv.quantity), 0) FROM inventories inv WHERE inv.product_id = p.id)`;
 
-      const dyes = db.prepare(`
+      const dyes = await db.prepare(`
         SELECT p.id, p.name, p.shade_number, p.line, p.family, p.color_hex, p.price, p.cost, p.sku, p.barcode,
                b.name as brand_name,
                ${stockSubquery} as current_stock,

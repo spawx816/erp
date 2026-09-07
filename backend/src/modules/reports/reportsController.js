@@ -2,7 +2,7 @@ const { db } = require('../../database/db');
 
 const reportsController = {
   // EXECUTIVE DASHBOARD WITH 12 KPIS, 9 CHARTS & ALERTS
-  getExecutiveDashboard: (req, res) => {
+  getExecutiveDashboard: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { branch_id, period = 'month' } = req.query;
@@ -15,21 +15,21 @@ const reportsController = {
       }
 
       // 1. Sales Today
-      const salesToday = db.prepare(`
+      const salesToday = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total, COUNT(id) as count
         FROM sales
         WHERE company_id = ? AND date(created_at) = date('now') AND status != 'cancelled' ${branchFilter}
       `).get(companyId, ...branchParams);
 
       // 2. Sales This Month
-      const salesMonth = db.prepare(`
+      const salesMonth = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total, COUNT(id) as count
         FROM sales
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') AND status != 'cancelled' ${branchFilter}
       `).get(companyId, ...branchParams);
 
       // 3. Collected Today
-      const collectedToday = db.prepare(`
+      const collectedToday = await db.prepare(`
         SELECT (
           COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND payment_date = date('now')), 0) +
           COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND date(s.created_at) = date('now') AND sp.payment_method != 'credit'), 0)
@@ -37,7 +37,7 @@ const reportsController = {
       `).get(companyId, companyId).total;
 
       // 4. Collected This Month
-      const collectedMonth = db.prepare(`
+      const collectedMonth = await db.prepare(`
         SELECT (
           COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')), 0) +
           COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = strftime('%Y-%m', 'now') AND sp.payment_method != 'credit'), 0)
@@ -45,21 +45,21 @@ const reportsController = {
       `).get(companyId, companyId).total;
 
       // 5. Total Pending Receivables (CxC Balance)
-      const totalPendingCxC = db.prepare(`
+      const totalPendingCxC = await db.prepare(`
         SELECT COALESCE(SUM(balance), 0) as total, COUNT(id) as count
         FROM accounts_receivable
         WHERE company_id = ? AND status != 'paid' ${branchFilter}
       `).get(companyId, ...branchParams);
 
       // 6. Overdue Receivables
-      const overdueCxC = db.prepare(`
+      const overdueCxC = await db.prepare(`
         SELECT COALESCE(SUM(balance), 0) as total, COUNT(id) as count
         FROM accounts_receivable
         WHERE company_id = ? AND status != 'paid' AND due_date < date('now') ${branchFilter}
       `).get(companyId, ...branchParams);
 
       // 7. Inventory Valuation
-      const inventoryValuation = db.prepare(`
+      const inventoryValuation = await db.prepare(`
         SELECT COALESCE(SUM(p.cost * inv.quantity), 0) as total
         FROM products p
         JOIN inventories inv ON inv.product_id = p.id
@@ -67,14 +67,14 @@ const reportsController = {
       `).get(companyId).total;
 
       // 8. Expenses This Month
-      const expensesMonth = db.prepare(`
+      const expensesMonth = await db.prepare(`
         SELECT COALESCE(SUM(amount), 0) as total
         FROM expenses
         WHERE company_id = ? AND strftime('%Y-%m', expense_date) = strftime('%Y-%m', 'now') ${branchFilter}
       `).get(companyId, ...branchParams);
 
       // 9. Cost of Goods Sold (CMV) this month & Estimated Profit
-      const cogsMonth = db.prepare(`
+      const cogsMonth = await db.prepare(`
         SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total
         FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
@@ -84,21 +84,21 @@ const reportsController = {
       const estimatedProfitMonth = (salesMonth.total / 1.18) - cogsMonth - expensesMonth.total;
 
       // 10. Pending Invoices Count
-      const pendingInvoicesCount = db.prepare(`
+      const pendingInvoicesCount = await db.prepare(`
         SELECT COUNT(*) as count
         FROM sales
         WHERE company_id = ? AND status IN ('pending', 'partial', 'overdue') ${branchFilter}
       `).get(companyId, ...branchParams).count;
 
       // 11. Active Customers Count
-      const activeCustomersCount = db.prepare(`
+      const activeCustomersCount = await db.prepare(`
         SELECT COUNT(*) as count
         FROM customers
         WHERE company_id = ? AND status = 'active'
       `).get(companyId).count;
 
       // 12. Products low on stock or out of stock
-      const stockCounts = db.prepare(`
+      const stockCounts = await db.prepare(`
         SELECT
           COUNT(CASE WHEN inv_sum <= 0 THEN 1 END) as out_of_stock,
           COUNT(CASE WHEN inv_sum > 0 AND inv_sum <= stock_min THEN 1 END) as low_stock
@@ -113,7 +113,7 @@ const reportsController = {
 
       // 9 INTERACTIVE CHARTS
       // 1. Sales by Day of Month
-      const salesByDay = db.prepare(`
+      const salesByDay = await db.prepare(`
         SELECT strftime('%d', created_at) as day, COALESCE(SUM(total), 0) as total
         FROM sales
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') AND status != 'cancelled'
@@ -129,7 +129,7 @@ const reportsController = {
       ];
 
       // 3. Sales by Salesperson
-      const salesBySalesperson = db.prepare(`
+      const salesBySalesperson = await db.prepare(`
         SELECT sp.name as salesperson_name, sp.code, COALESCE(SUM(s.total), 0) as total, COUNT(s.id) as invoice_count
         FROM salespeople sp
         LEFT JOIN sales s ON s.salesperson_id = sp.id AND s.status != 'cancelled' AND strftime('%Y-%m', s.created_at) = strftime('%Y-%m', 'now')
@@ -139,7 +139,7 @@ const reportsController = {
       `).all(companyId);
 
       // 4. Sales by Category
-      const salesByCategory = db.prepare(`
+      const salesByCategory = await db.prepare(`
         SELECT c.name as category_name, COALESCE(SUM(si.total), 0) as total
         FROM categories c
         JOIN products p ON p.category_id = c.id
@@ -151,7 +151,7 @@ const reportsController = {
       `).all(companyId);
 
       // 5. CxC Aging Breakdown (0-30, 31-60, 61-90, 91-120, +120)
-      const agingData = db.prepare(`
+      const agingData = await db.prepare(`
         SELECT
           COALESCE(SUM(CASE WHEN days_overdue <= 30 THEN balance ELSE 0 END), 0) as bracket_0_30,
           COALESCE(SUM(CASE WHEN days_overdue > 30 AND days_overdue <= 60 THEN balance ELSE 0 END), 0) as bracket_31_60,
@@ -166,7 +166,7 @@ const reportsController = {
       `).get(companyId);
 
       // 6. Expenses by Category
-      const expensesByCategory = db.prepare(`
+      const expensesByCategory = await db.prepare(`
         SELECT ec.name, COALESCE(SUM(e.amount), 0) as total
         FROM expense_categories ec
         JOIN expenses e ON e.category_id = ec.id
@@ -176,7 +176,7 @@ const reportsController = {
       `).all(companyId);
 
       // 7. Top Selling Products
-      const topProducts = db.prepare(`
+      const topProducts = await db.prepare(`
         SELECT si.product_name, SUM(si.quantity) as units_sold, SUM(si.total) as total_revenue
         FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
@@ -187,7 +187,7 @@ const reportsController = {
       `).all(companyId);
 
       // 8. Top Customers by Purchase Volume
-      const topCustomers = db.prepare(`
+      const topCustomers = await db.prepare(`
         SELECT COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                c.code, COALESCE(SUM(s.total), 0) as total_purchased, COUNT(s.id) as purchases_count
         FROM customers c
@@ -199,7 +199,7 @@ const reportsController = {
       `).all(companyId);
 
       // 9. Sales Evolution Last 12 Months
-      const sales12Months = db.prepare(`
+      const sales12Months = await db.prepare(`
         SELECT strftime('%Y-%m', created_at) as month, SUM(total) as total, COUNT(id) as count
         FROM sales
         WHERE company_id = ? AND status != 'cancelled'
@@ -289,7 +289,7 @@ const reportsController = {
   },
 
   // MONTHLY CLOSING (CIERRE MENSUAL & P&L COMPARATIVO)
-  getMonthlyClosing: (req, res) => {
+  getMonthlyClosing: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const month = parseInt(req.query.month || 9, 10);
@@ -299,13 +299,13 @@ const reportsController = {
       const curFilter = `${year}-${monthStr}`;
 
       // Check if officially closed
-      const officialClosing = db.prepare(`
+      const officialClosing = await db.prepare(`
         SELECT * FROM monthly_closings
         WHERE company_id = ? AND month = ? AND year = ?
       `).get(companyId, month, year);
 
       // Dynamic calculation for the selected month
-      const sales = db.prepare(`
+      const sales = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total,
                COALESCE(SUM(discount_amount), 0) as discounts,
                COALESCE(SUM(subtotal), 0) as net_sales
@@ -313,39 +313,39 @@ const reportsController = {
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
       `).get(companyId, curFilter);
 
-      const collections = db.prepare(`
+      const collections = await db.prepare(`
         SELECT (
           COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND strftime('%Y-%m', payment_date) = ?), 0) +
           COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND sp.payment_method != 'credit'), 0)
         ) as total
       `).get(companyId, curFilter, companyId, curFilter).total;
 
-      const creditNotes = db.prepare(`
+      const creditNotes = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total
         FROM credit_notes
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?
       `).get(companyId, curFilter).total;
 
-      const purchases = db.prepare(`
+      const purchases = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total
         FROM purchases
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
       `).get(companyId, curFilter).total;
 
-      const cogs = db.prepare(`
+      const cogs = await db.prepare(`
         SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total
         FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
         WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND s.status != 'cancelled'
       `).get(companyId, curFilter).total;
 
-      const operatingExpenses = db.prepare(`
+      const operatingExpenses = await db.prepare(`
         SELECT COALESCE(SUM(amount), 0) as total
         FROM expenses
         WHERE company_id = ? AND strftime('%Y-%m', expense_date) = ?
       `).get(companyId, curFilter).total;
 
-      const commissions = db.prepare(`
+      const commissions = await db.prepare(`
         SELECT COALESCE(SUM(commission_amount), 0) as total
         FROM commissions
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?
@@ -360,13 +360,13 @@ const reportsController = {
       if (prevMonth === 0) { prevMonth = 12; prevYear--; }
       const prevFilter = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
 
-      const prevSales = db.prepare(`
+      const prevSales = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total
         FROM sales
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
       `).get(companyId, prevFilter).total;
 
-      const prevNetProfit = db.prepare(`
+      const prevNetProfit = await db.prepare(`
         SELECT net_profit FROM monthly_closings
         WHERE company_id = ? AND month = ? AND year = ?
       `).get(companyId, prevMonth, prevYear)?.net_profit || (prevSales * 0.15);
@@ -409,14 +409,14 @@ const reportsController = {
     }
   },
 
-  saveMonthlyClosing: (req, res) => {
+  saveMonthlyClosing: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { month, year, notes } = req.body;
 
       const pnlData = reportsController.getMonthlyClosingSync(companyId, month, year);
 
-      db.prepare(`
+      await db.prepare(`
         INSERT OR REPLACE INTO monthly_closings (
           company_id, month, year, total_sales, total_collections, pending_receivables,
           discounts_total, credit_notes_total, purchases_total, operating_expenses,
@@ -436,12 +436,12 @@ const reportsController = {
     }
   },
 
-  getMonthlyClosingSync: (companyId, month, year) => {
+  getMonthlyClosingSync: async (companyId, month, year) => {
     const curFilter = `${year}-${String(month).padStart(2, '0')}`;
-    const s = db.prepare(`SELECT COALESCE(SUM(total), 0) as total, COALESCE(SUM(subtotal), 0) as subtotal, COALESCE(SUM(discount_amount), 0) as discounts FROM sales WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'`).get(companyId, curFilter);
-    const exp = db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE company_id = ? AND strftime('%Y-%m', expense_date) = ?`).get(companyId, curFilter).total;
-    const cogs = db.prepare(`SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND s.status != 'cancelled'`).get(companyId, curFilter).total;
-    const comm = db.prepare(`SELECT COALESCE(SUM(commission_amount), 0) as total FROM commissions WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?`).get(companyId, curFilter).total;
+    const s = await db.prepare(`SELECT COALESCE(SUM(total), 0) as total, COALESCE(SUM(subtotal), 0) as subtotal, COALESCE(SUM(discount_amount), 0) as discounts FROM sales WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'`).get(companyId, curFilter);
+    const exp = await db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE company_id = ? AND strftime('%Y-%m', expense_date) = ?`).get(companyId, curFilter).total;
+    const cogs = await db.prepare(`SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND s.status != 'cancelled'`).get(companyId, curFilter).total;
+    const comm = await db.prepare(`SELECT COALESCE(SUM(commission_amount), 0) as total FROM commissions WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?`).get(companyId, curFilter).total;
     const gp = s.subtotal - cogs;
     const np = gp - exp - comm;
     return {
@@ -463,14 +463,14 @@ const reportsController = {
   },
 
   // REPORTS CENTER
-  getReportsCenter: (req, res) => {
+  getReportsCenter: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { report_type = 'sales', start_date, end_date } = req.query;
 
       // Returns data matching the selected report type for easy export or printing
       if (report_type === 'sales') {
-        const data = db.prepare(`
+        const data = await db.prepare(`
           SELECT s.invoice_number, s.sale_number, s.ncf, s.fiscal_type_code, s.created_at as date,
                  s.subtotal, s.tax_amount, s.total, s.sale_type, s.status,
                  COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
@@ -487,7 +487,7 @@ const reportsController = {
       }
 
       if (report_type === 'cxc') {
-        const data = db.prepare(`
+        const data = await db.prepare(`
           SELECT ar.invoice_number, ar.ncf, ar.issue_date, ar.due_date, ar.amount, ar.balance, ar.status,
                  COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                  c.phone as customer_phone,
@@ -503,7 +503,7 @@ const reportsController = {
       }
 
       if (report_type === 'salespeople') {
-        const data = db.prepare(`
+        const data = await db.prepare(`
           SELECT sp.name, sp.code, sp.zone, sp.monthly_goal, sp.commission_rate,
                  COUNT(s.id) as total_invoices,
                  COALESCE(SUM(s.total), 0) as total_sales,
@@ -524,14 +524,14 @@ const reportsController = {
     }
   },
 
-  getSalesReport: (req, res) => {
+  getSalesReport: async (req, res) => {
     return reportsController.getReportsCenter(req, res);
   },
 
-  getInventoryValuationReport: (req, res) => {
+  getInventoryValuationReport: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const data = db.prepare(`
+      const data = await db.prepare(`
         SELECT p.name, p.sku, p.shade_number, p.cost, p.price,
                c.name as category_name, b.name as brand_name,
                COALESCE(SUM(inv.quantity), 0) as stock,

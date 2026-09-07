@@ -5,14 +5,14 @@ const { JWT_SECRET } = require('../../middlewares/auth');
 const { logAudit } = require('../../middlewares/audit');
 
 const authController = {
-  login: (req, res) => {
+  login: async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {
         return res.status(400).json({ success: false, message: 'Usuario y contraseña requeridos.' });
       }
 
-      const user = db.prepare(`
+      const user = await db.prepare(`
         SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email,
                u.password_hash, u.max_discount_percentage, u.status,
                r.name as role_name, r.slug as role_slug,
@@ -37,19 +37,19 @@ const authController = {
       }
 
       // Fetch user's permissions
-      const permissions = db.prepare(`
+      const permissions = (await db.prepare(`
         SELECT p.slug
         FROM role_permissions rp
         JOIN permissions p ON rp.permission_id = p.id
         WHERE rp.role_id = ?
-      `).all(user.role_id).map(r => r.slug);
+      `).all(user.role_id)).map(r => r.slug);
 
       // Fetch user's accessible branches
       let branches = [];
       if (user.role_slug === 'super-admin' || user.role_slug === 'admin') {
-        branches = db.prepare("SELECT id, name, code, is_main FROM branches WHERE company_id = ? AND status = 'active'").all(user.company_id);
+        branches = await db.prepare("SELECT id, name, code, is_main FROM branches WHERE company_id = ? AND status = 'active'").all(user.company_id);
       } else {
-        branches = db.prepare(`
+        branches = await db.prepare(`
           SELECT b.id, b.name, b.code, b.is_main
           FROM user_branches ub
           JOIN branches b ON ub.branch_id = b.id
@@ -94,16 +94,16 @@ const authController = {
     }
   },
 
-  me: (req, res) => {
+  me: async (req, res) => {
     try {
       const user = req.user;
       
       // Get branches
       let branches = [];
       if (user.role_slug === 'super-admin' || user.role_slug === 'admin') {
-        branches = db.prepare("SELECT id, name, code, is_main FROM branches WHERE company_id = ? AND status = 'active'").all(user.company_id);
+        branches = await db.prepare("SELECT id, name, code, is_main FROM branches WHERE company_id = ? AND status = 'active'").all(user.company_id);
       } else {
-        branches = db.prepare(`
+        branches = await db.prepare(`
           SELECT b.id, b.name, b.code, b.is_main
           FROM user_branches ub
           JOIN branches b ON ub.branch_id = b.id
@@ -112,7 +112,7 @@ const authController = {
       }
 
       // Check for open cash session for this user in current branch
-      const activeCashSession = db.prepare(`
+      const activeCashSession = await db.prepare(`
         SELECT cs.*, cr.name as register_name
         FROM cash_sessions cs
         JOIN cash_registers cr ON cs.cash_register_id = cr.id
@@ -131,7 +131,7 @@ const authController = {
     }
   },
 
-  logout: (req, res) => {
+  logout: async (req, res) => {
     if (req.user) {
       logAudit({
         companyId: req.user.company_id,

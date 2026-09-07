@@ -3,7 +3,7 @@ const InventoryService = require('../inventory/inventoryService');
 const { logAudit } = require('../../middlewares/audit');
 
 const purchasesController = {
-  getPurchases: (req, res) => {
+  getPurchases: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { search, supplier_id, status, start_date, end_date } = req.query;
@@ -32,7 +32,7 @@ const purchasesController = {
         params.push(`%${search}%`, `%${search}%`, `%${search}%`);
       }
 
-      const purchases = db.prepare(`
+      const purchases = await db.prepare(`
         SELECT p.*,
                s.company_name as supplier_name, s.tax_id as supplier_tax_id,
                w.name as warehouse_name,
@@ -53,12 +53,12 @@ const purchasesController = {
     }
   },
 
-  getPurchaseById: (req, res) => {
+  getPurchaseById: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
 
-      const purchase = db.prepare(`
+      const purchase = await db.prepare(`
         SELECT p.*,
                s.company_name as supplier_name, s.tax_id as supplier_tax_id, s.phone as supplier_phone,
                w.name as warehouse_name,
@@ -74,7 +74,7 @@ const purchasesController = {
         return res.status(404).json({ success: false, message: 'Compra no encontrada.' });
       }
 
-      purchase.items = db.prepare(`
+      purchase.items = await db.prepare(`
         SELECT pi.*, p.name as product_name, p.sku, pv.variant_name
         FROM purchase_items pi
         JOIN products p ON pi.product_id = p.id
@@ -88,7 +88,7 @@ const purchasesController = {
     }
   },
 
-  createPurchase: (req, res) => {
+  createPurchase: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const {
@@ -100,12 +100,12 @@ const purchasesController = {
         return res.status(400).json({ success: false, message: 'Proveedor, almacén y al menos un ítem son obligatorios.' });
       }
 
-      const warehouse = db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(warehouse_id, companyId);
+      const warehouse = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(warehouse_id, companyId);
       if (!warehouse) return res.status(404).json({ success: false, message: 'Almacén no válido.' });
 
       const purchaseNumber = `COM-${Date.now().toString().slice(-6)}`;
 
-      const purchaseId = runTransaction(() => {
+      const purchaseId = await runTransaction(async () => {
         let subtotal = 0;
         let taxAmount = 0;
         let total = 0;
@@ -119,7 +119,7 @@ const purchasesController = {
         });
 
         // 1. Insert purchase
-        const stmtPurch = db.prepare(`
+        const stmtPurch = await db.prepare(`
           INSERT INTO purchases (
             company_id, branch_id, warehouse_id, supplier_id, user_id,
             purchase_number, supplier_invoice_number, payment_terms, payment_status,
@@ -136,7 +136,7 @@ const purchasesController = {
         const pId = resPurch.lastInsertRowid;
 
         // 2. Insert items and update inventory & kardex
-        const stmtItem = db.prepare(`
+        const stmtItem = await db.prepare(`
           INSERT INTO purchase_items (
             purchase_id, product_id, variant_id, quantity, unit_cost, subtotal, tax_rate, tax_amount, total
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -169,9 +169,9 @@ const purchasesController = {
           });
 
           // Update product cost to latest purchase cost
-          db.prepare('UPDATE products SET cost = ? WHERE id = ?').run(item.unit_cost, item.product_id);
+          await db.prepare('UPDATE products SET cost = ? WHERE id = ?').run(item.unit_cost, item.product_id);
           if (item.variant_id) {
-            db.prepare('UPDATE product_variants SET cost = ? WHERE id = ?').run(item.unit_cost, item.variant_id);
+            await db.prepare('UPDATE product_variants SET cost = ? WHERE id = ?').run(item.unit_cost, item.variant_id);
           }
         }
 
@@ -182,7 +182,7 @@ const purchasesController = {
           const dueDateStr = dueDate.toISOString().split('T')[0];
           const issueDateStr = new Date().toISOString().split('T')[0];
 
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO accounts_payable (
               company_id, branch_id, supplier_id, purchase_id, document_number,
               issue_date, due_date, amount, balance, status
@@ -190,7 +190,7 @@ const purchasesController = {
           `).run(companyId, warehouse.branch_id, supplier_id, pId, supplier_invoice_number || purchaseNumber, issueDateStr, dueDateStr, total, total);
 
           // Update supplier balance
-          db.prepare('UPDATE suppliers SET current_balance = current_balance + ? WHERE id = ?').run(total, supplier_id);
+          await db.prepare('UPDATE suppliers SET current_balance = current_balance + ? WHERE id = ?').run(total, supplier_id);
         }
 
         logAudit({

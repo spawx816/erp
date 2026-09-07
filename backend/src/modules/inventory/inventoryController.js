@@ -4,7 +4,7 @@ const { logAudit } = require('../../middlewares/audit');
 
 const inventoryController = {
   // Current stock list
-  getStock: (req, res) => {
+  getStock: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { warehouse_id, branch_id, search, low_stock, page = 1, limit = 50 } = req.query;
@@ -50,7 +50,7 @@ const inventoryController = {
 
       query += ` ORDER BY p.name ASC LIMIT ? OFFSET ?`;
 
-      const rows = db.prepare(query).all(...params, limit, offset);
+      const rows = await db.prepare(query).all(...params, limit, offset);
 
       return res.json({ success: true, data: rows });
     } catch (err) {
@@ -59,7 +59,7 @@ const inventoryController = {
   },
 
   // Kardex movements
-  getKardex: (req, res) => {
+  getKardex: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { product_id, warehouse_id, movement_type, start_date, end_date, page = 1, limit = 50 } = req.query;
@@ -91,9 +91,9 @@ const inventoryController = {
 
       const whereSQL = whereClauses.join(' AND ');
 
-      const count = db.prepare(`SELECT COUNT(*) as total FROM inventory_movements m WHERE ${whereSQL}`).get(...params).total;
+      const count = await db.prepare(`SELECT COUNT(*) as total FROM inventory_movements m WHERE ${whereSQL}`).get(...params).total;
 
-      const movements = db.prepare(`
+      const movements = await db.prepare(`
         SELECT m.*,
                p.name as product_name, p.sku as product_sku,
                pv.variant_name,
@@ -127,7 +127,7 @@ const inventoryController = {
   },
 
   // Manual stock adjustment (In/Out)
-  adjustStock: (req, res) => {
+  adjustStock: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { warehouse_id, product_id, variant_id = null, adjustment_type, quantity, unit_cost, reason } = req.body;
@@ -136,7 +136,7 @@ const inventoryController = {
         return res.status(400).json({ success: false, message: 'Almacén, producto, cantidad y motivo son obligatorios.' });
       }
 
-      const warehouse = db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(warehouse_id, companyId);
+      const warehouse = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(warehouse_id, companyId);
       if (!warehouse) {
         return res.status(404).json({ success: false, message: 'Almacén no encontrado.' });
       }
@@ -144,7 +144,7 @@ const inventoryController = {
       const qty = Math.abs(Number(quantity)) * (adjustment_type === 'out' ? -1 : 1);
       const movType = adjustment_type === 'out' ? 'adjustment_out' : 'adjustment_in';
 
-      const result = runTransaction(() => {
+      const result = await runTransaction(async () => {
         const mov = InventoryService.recordMovement({
           companyId,
           branchId: warehouse.branch_id,
@@ -179,10 +179,10 @@ const inventoryController = {
   },
 
   // TRANSFERS
-  getTransfers: (req, res) => {
+  getTransfers: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const transfers = db.prepare(`
+      const transfers = await db.prepare(`
         SELECT t.*,
                w1.name as from_warehouse_name, b1.name as from_branch_name,
                w2.name as to_warehouse_name, b2.name as to_branch_name,
@@ -197,7 +197,7 @@ const inventoryController = {
         ORDER BY t.created_at DESC
       `).all(companyId);
 
-      const getItems = db.prepare(`
+      const getItems = await db.prepare(`
         SELECT ti.*, p.name as product_name, p.sku
         FROM inventory_transfer_items ti
         JOIN products p ON ti.product_id = p.id
@@ -214,7 +214,7 @@ const inventoryController = {
     }
   },
 
-  createTransfer: (req, res) => {
+  createTransfer: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { from_warehouse_id, to_warehouse_id, notes, items } = req.body;
@@ -227,12 +227,12 @@ const inventoryController = {
         return res.status(400).json({ success: false, message: 'El almacén de origen y destino no pueden ser el mismo.' });
       }
 
-      const wFrom = db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(from_warehouse_id);
-      const wTo = db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(to_warehouse_id);
+      const wFrom = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(from_warehouse_id);
+      const wTo = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(to_warehouse_id);
 
       const transferNumber = `TRF-${Date.now().toString().slice(-6)}`;
 
-      const transferId = runTransaction(() => {
+      const transferId = await runTransaction(async () => {
         // Validate stock for all items
         for (const item of items) {
           const currentStock = InventoryService.getCurrentStock(from_warehouse_id, item.product_id, item.variant_id);
@@ -241,7 +241,7 @@ const inventoryController = {
           }
         }
 
-        const stmtTr = db.prepare(`
+        const stmtTr = await db.prepare(`
           INSERT INTO inventory_transfers (
             company_id, from_branch_id, from_warehouse_id, to_branch_id, to_warehouse_id,
             user_id, transfer_number, status, notes
@@ -251,7 +251,7 @@ const inventoryController = {
         const resTr = stmtTr.run(companyId, wFrom.branch_id, from_warehouse_id, wTo.branch_id, to_warehouse_id, req.user.id, transferNumber, notes || null);
         const trId = resTr.lastInsertRowid;
 
-        const stmtItem = db.prepare(`
+        const stmtItem = await db.prepare(`
           INSERT INTO inventory_transfer_items (transfer_id, product_id, variant_id, quantity, unit_cost)
           VALUES (?, ?, ?, ?, ?)
         `);
@@ -296,12 +296,12 @@ const inventoryController = {
     }
   },
 
-  receiveTransfer: (req, res) => {
+  receiveTransfer: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
 
-      const transfer = db.prepare(`
+      const transfer = await db.prepare(`
         SELECT * FROM inventory_transfers WHERE id = ? AND company_id = ?
       `).get(id, companyId);
 
@@ -313,8 +313,8 @@ const inventoryController = {
         return res.status(400).json({ success: false, message: 'Esta transferencia ya ha sido recibida previamente.' });
       }
 
-      runTransaction(() => {
-        const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id = ?').all(id);
+      await runTransaction(async () => {
+        const items = await db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id = ?').all(id);
 
         for (const item of items) {
           InventoryService.recordMovement({
@@ -334,7 +334,7 @@ const inventoryController = {
           });
         }
 
-        db.prepare(`
+        await db.prepare(`
           UPDATE inventory_transfers
           SET status = 'received', received_at = CURRENT_TIMESTAMP
           WHERE id = ?
@@ -358,7 +358,7 @@ const inventoryController = {
   },
 
   // LOTS (LOTES DE INVENTARIO Y ANTIGÜEDAD)
-  getLots: (req, res) => {
+  getLots: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { product_id, warehouse_id } = req.query;
@@ -369,7 +369,7 @@ const inventoryController = {
       if (product_id) { where.push('l.product_id = ?'); params.push(product_id); }
       if (warehouse_id) { where.push('l.warehouse_id = ?'); params.push(warehouse_id); }
 
-      const lots = db.prepare(`
+      const lots = await db.prepare(`
         SELECT l.*,
                p.name as product_name, p.sku, p.shade_number, p.line,
                w.name as warehouse_name,
@@ -391,13 +391,13 @@ const inventoryController = {
   },
 
   // INVENTORY ROTATION & AGE ANALYSIS (ANALISIS DE ROTACIÓN)
-  getInventoryAnalysis: (req, res) => {
+  getInventoryAnalysis: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const noMovementDays = parseInt(req.query.no_movement_days || 60, 10);
 
       // Total Inventory Valuation
-      const totals = db.prepare(`
+      const totals = await db.prepare(`
         SELECT COALESCE(SUM(p.cost * inv.quantity), 0) as total_valuation,
                COALESCE(SUM(inv.quantity), 0) as total_units,
                COUNT(DISTINCT p.id) as total_products
@@ -407,7 +407,7 @@ const inventoryController = {
       `).get(companyId);
 
       // Stock status counts
-      const stockCounts = db.prepare(`
+      const stockCounts = await db.prepare(`
         SELECT
           COUNT(CASE WHEN inv_sum <= 0 THEN 1 END) as out_of_stock,
           COUNT(CASE WHEN inv_sum > 0 AND inv_sum <= stock_min THEN 1 END) as low_stock,
@@ -422,7 +422,7 @@ const inventoryController = {
       `).get(companyId);
 
       // Product sales in last 30 days
-      const productsRotation = db.prepare(`
+      const productsRotation = await db.prepare(`
         SELECT p.id, p.name, p.sku, p.shade_number, p.line, p.cost, p.price,
                c.name as category_name, b.name as brand_name,
                COALESCE(SUM(inv.quantity), 0) as current_stock,
@@ -471,7 +471,7 @@ const inventoryController = {
       };
 
       // Valuation by category
-      const valuationByCategory = db.prepare(`
+      const valuationByCategory = await db.prepare(`
         SELECT c.name, COALESCE(SUM(p.cost * inv.quantity), 0) as valuation
         FROM categories c
         JOIN products p ON p.category_id = c.id
@@ -482,7 +482,7 @@ const inventoryController = {
       `).all(companyId);
 
       // Valuation by brand
-      const valuationByBrand = db.prepare(`
+      const valuationByBrand = await db.prepare(`
         SELECT b.name, COALESCE(SUM(p.cost * inv.quantity), 0) as valuation
         FROM brands b
         JOIN products p ON p.brand_id = b.id

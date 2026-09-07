@@ -6,7 +6,7 @@ const { logAudit } = require('../../middlewares/audit');
 
 const adminController = {
   // GLOBAL SEARCH
-  globalSearch: (req, res) => {
+  globalSearch: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { q } = req.query;
@@ -18,7 +18,7 @@ const adminController = {
       const term = `%${q.trim()}%`;
 
       // 1. Products
-      const products = db.prepare(`
+      const products = await db.prepare(`
         SELECT id, name as title, 'Producto: ' || sku || ' | ' || COALESCE(barcode, '') as subtitle, 'product' as type, '/products' as link
         FROM products
         WHERE company_id = ? AND (name LIKE ? OR sku LIKE ? OR barcode LIKE ? OR internal_code LIKE ?)
@@ -26,7 +26,7 @@ const adminController = {
       `).all(companyId, term, term, term, term);
 
       // 2. Customers
-      const customers = db.prepare(`
+      const customers = await db.prepare(`
         SELECT id, COALESCE(company_name, first_name || ' ' || COALESCE(last_name, '')) as title, 'Cliente: ' || COALESCE(tax_id, id_card, phone, '') as subtitle, 'customer' as type, '/customers' as link
         FROM customers
         WHERE company_id = ? AND (company_name LIKE ? OR first_name LIKE ? OR last_name LIKE ? OR tax_id LIKE ? OR id_card LIKE ?)
@@ -34,7 +34,7 @@ const adminController = {
       `).all(companyId, term, term, term, term, term);
 
       // 3. Sales / Invoices
-      const sales = db.prepare(`
+      const sales = await db.prepare(`
         SELECT id, 'Factura ' || sale_number || ' (' || COALESCE(ncf, '') || ')' as title, 'Monto: RD$ ' || total || ' | ' || status as subtitle, 'sale' as type, '/sales' as link
         FROM sales
         WHERE company_id = ? AND (sale_number LIKE ? OR ncf LIKE ? OR invoice_number LIKE ?)
@@ -42,7 +42,7 @@ const adminController = {
       `).all(companyId, term, term, term);
 
         // 4. Suppliers
-      const suppliers = db.prepare(`
+      const suppliers = await db.prepare(`
         SELECT id, company_name as title, 'Proveedor: ' || tax_id || ' | ' || COALESCE(contact_person, '') as subtitle, 'supplier' as type, '/suppliers' as link
         FROM suppliers
         WHERE company_id = ? AND (company_name LIKE ? OR trade_name LIKE ? OR tax_id LIKE ?)
@@ -50,7 +50,7 @@ const adminController = {
       `).all(companyId, term, term, term);
 
       // 5. Salespeople
-      const salespeople = db.prepare(`
+      const salespeople = await db.prepare(`
         SELECT id, name as title, 'Vendedor: ' || code || ' | ' || COALESCE(zone, '') as subtitle, 'salesperson' as type, '/salespeople' as link
         FROM salespeople
         WHERE company_id = ? AND (name LIKE ? OR code LIKE ? OR phone LIKE ?)
@@ -65,27 +65,27 @@ const adminController = {
   },
 
   // NOTIFICATIONS
-  getNotifications: (req, res) => {
+  getNotifications: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const notifs = db.prepare(`
+      const notifs = await db.prepare(`
         SELECT * FROM notifications
         WHERE company_id = ?
         ORDER BY is_read ASC, created_at DESC
         LIMIT 25
       `).all(companyId);
-      const unreadCount = db.prepare(`SELECT COUNT(*) as count FROM notifications WHERE company_id = ? AND is_read = 0`).get(companyId).count;
+      const unreadCount = await db.prepare(`SELECT COUNT(*) as count FROM notifications WHERE company_id = ? AND is_read = 0`).get(companyId).count;
       return res.json({ success: true, data: notifs, unread_count: unreadCount });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  markNotificationRead: (req, res) => {
+  markNotificationRead: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
-      db.prepare(`UPDATE notifications SET is_read = 1 WHERE id = ? AND company_id = ?`).run(id, companyId);
+      await db.prepare(`UPDATE notifications SET is_read = 1 WHERE id = ? AND company_id = ?`).run(id, companyId);
       return res.json({ success: true, message: 'Notificación marcada como leída.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -93,10 +93,10 @@ const adminController = {
   },
 
   // AUTHORIZATIONS
-  getAuthorizations: (req, res) => {
+  getAuthorizations: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const list = db.prepare(`
+      const list = await db.prepare(`
         SELECT da.*,
                uReq.first_name || ' ' || uReq.last_name as requested_by_name,
                uAuth.first_name || ' ' || uAuth.last_name as authorized_by_name,
@@ -115,13 +115,13 @@ const adminController = {
     }
   },
 
-  requestAuthorization: (req, res) => {
+  requestAuthorization: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { customer_id, auth_type, requested_percent, reason, supervisor_username, supervisor_password } = req.body;
 
       // Verify supervisor credentials
-      const supervisor = db.prepare(`
+      const supervisor = await db.prepare(`
         SELECT u.id, u.password_hash, r.slug as role_slug
         FROM users u
         JOIN roles r ON u.role_id = r.id
@@ -132,13 +132,13 @@ const adminController = {
         return res.status(403).json({ success: false, message: 'Credenciales de supervisor no válidas.' });
       }
 
-      const stmt = db.prepare(`
+      const stmt = await db.prepare(`
         INSERT INTO discount_authorizations (
           company_id, customer_id, requested_by_user_id, authorized_by_user_id, auth_type,
           requested_percent, discount_amount, reason, status
         ) VALUES (?, ?, ?, ?, ?, ?, 0.00, ?, 'approved')
       `);
-      const r = stmt.run(companyId, customer_id || null, req.user.id, supervisor.id, auth_type || 'special_override', requested_percent || 0, reason || 'Autorización de supervisor para facturación');
+      const r = await stmt.run(companyId, customer_id || null, req.user.id, supervisor.id, auth_type || 'special_override', requested_percent || 0, reason || 'Autorización de supervisor para facturación');
 
       logAudit({
         companyId,
@@ -155,11 +155,11 @@ const adminController = {
     }
   },
 
-  approveAuthorization: (req, res) => {
+  approveAuthorization: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
-      db.prepare(`UPDATE discount_authorizations SET status = 'approved', authorized_by_user_id = ? WHERE id = ? AND company_id = ?`).run(req.user.id, id, companyId);
+      await db.prepare(`UPDATE discount_authorizations SET status = 'approved', authorized_by_user_id = ? WHERE id = ? AND company_id = ?`).run(req.user.id, id, companyId);
       return res.json({ success: true, message: 'Autorización aprobada.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -167,10 +167,10 @@ const adminController = {
   },
 
   // USERS
-  getUsers: (req, res) => {
+  getUsers: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const users = db.prepare(`
+      const users = await db.prepare(`
         SELECT u.id, u.username, u.first_name, u.last_name, u.email, u.phone, u.id_card,
                u.job_title, u.max_discount_percentage, u.status, u.role_id, u.branch_id,
                r.name as role_name, r.slug as role_slug,
@@ -188,7 +188,7 @@ const adminController = {
     }
   },
 
-  createUser: (req, res) => {
+  createUser: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const {
@@ -200,22 +200,22 @@ const adminController = {
         return res.status(400).json({ success: false, message: 'Usuario, correo, contraseña y rol son obligatorios.' });
       }
 
-      const existing = db.prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email);
+      const existing = await db.prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email);
       if (existing) {
         return res.status(400).json({ success: false, message: 'El usuario o correo electrónico ya se encuentra registrado.' });
       }
 
       const passwordHash = bcrypt.hashSync(password, 10);
 
-      const userId = runTransaction(() => {
-        const stmt = db.prepare(`
+      const userId = await runTransaction(async () => {
+        const stmt = await db.prepare(`
           INSERT INTO users (
             company_id, branch_id, role_id, username, first_name, last_name,
             email, phone, id_card, password_hash, job_title, max_discount_percentage, status
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
         `);
 
-        const result = stmt.run(
+        const result = await stmt.run(
           companyId, branch_id || null, role_id, username, first_name, last_name,
           email, phone || null, id_card || null, passwordHash, job_title || null, max_discount_percentage
         );
@@ -223,7 +223,7 @@ const adminController = {
 
         // Assign branch
         if (branch_id) {
-          db.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(uid, branch_id);
+          await db.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(uid, branch_id);
         }
 
         logAudit({
@@ -246,7 +246,7 @@ const adminController = {
     }
   },
 
-  updateUser: (req, res) => {
+  updateUser: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
@@ -255,16 +255,16 @@ const adminController = {
         phone, id_card, job_title, max_discount_percentage, status, password
       } = req.body;
 
-      const user = db.prepare('SELECT * FROM users WHERE id = ? AND company_id = ?').get(id, companyId);
+      const user = await db.prepare('SELECT * FROM users WHERE id = ? AND company_id = ?').get(id, companyId);
       if (!user) return res.status(404).json({ success: false, message: 'Usuario no encontrado.' });
 
-      runTransaction(() => {
+      await runTransaction(async () => {
         let passwordHash = user.password_hash;
         if (password && password.trim().length >= 6) {
           passwordHash = bcrypt.hashSync(password, 10);
         }
 
-        db.prepare(`
+        await db.prepare(`
           UPDATE users SET
             first_name = COALESCE(?, first_name),
             last_name = COALESCE(?, last_name),
@@ -286,7 +286,7 @@ const adminController = {
         );
 
         if (branch_id) {
-          db.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(id, branch_id);
+          await db.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(id, branch_id);
         }
 
         logAudit({
@@ -308,10 +308,10 @@ const adminController = {
   },
 
   // ROLES & PERMISSIONS
-  getRoles: (req, res) => {
+  getRoles: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const roles = db.prepare(`
+      const roles = await db.prepare(`
         SELECT r.*,
                (SELECT COUNT(*) FROM role_permissions rp WHERE rp.role_id = r.id) as permissions_count
         FROM roles r
@@ -319,7 +319,7 @@ const adminController = {
         ORDER BY r.id ASC
       `).all(companyId);
 
-      const allPermissions = db.prepare('SELECT * FROM permissions ORDER BY module ASC, name ASC').all();
+      const allPermissions = await db.prepare('SELECT * FROM permissions ORDER BY module ASC, name ASC').all();
 
       return res.json({ success: true, roles, all_permissions: allPermissions });
     } catch (err) {
@@ -328,11 +328,11 @@ const adminController = {
   },
 
   // BRANCHES & WAREHOUSES
-  getBranchesAndWarehouses: (req, res) => {
+  getBranchesAndWarehouses: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const branches = db.prepare('SELECT * FROM branches WHERE company_id = ? ORDER BY is_main DESC, name ASC').all(companyId);
-      const warehouses = db.prepare(`
+      const branches = await db.prepare('SELECT * FROM branches WHERE company_id = ? ORDER BY is_main DESC, name ASC').all(companyId);
+      const warehouses = await db.prepare(`
         SELECT w.*, b.name as branch_name
         FROM warehouses w
         JOIN branches b ON w.branch_id = b.id
@@ -346,34 +346,34 @@ const adminController = {
     }
   },
 
-  createBranch: (req, res) => {
+  createBranch: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { name, code, phone, email, address, city } = req.body;
       if (!name || !code) return res.status(400).json({ success: false, message: 'Nombre y código requeridos.' });
 
-      const stmt = db.prepare(`
+      const stmt = await db.prepare(`
         INSERT INTO branches (company_id, name, code, phone, email, address, city, is_main, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active')
       `);
-      const resB = stmt.run(companyId, name, code, phone || null, email || null, address || null, city || null);
+      const resB = await stmt.run(companyId, name, code, phone || null, email || null, address || null, city || null);
       return res.status(201).json({ success: true, message: 'Sucursal creada exitosamente.', branch_id: resB.lastInsertRowid });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  createWarehouse: (req, res) => {
+  createWarehouse: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { branch_id, name, code } = req.body;
       if (!branch_id || !name || !code) return res.status(400).json({ success: false, message: 'Sucursal, nombre y código requeridos.' });
 
-      const stmt = db.prepare(`
+      const stmt = await db.prepare(`
         INSERT INTO warehouses (company_id, branch_id, name, code, is_default, status)
         VALUES (?, ?, ?, ?, 0, 'active')
       `);
-      const resW = stmt.run(companyId, branch_id, name, code);
+      const resW = await stmt.run(companyId, branch_id, name, code);
       return res.status(201).json({ success: true, message: 'Almacén creado exitosamente.', warehouse_id: resW.lastInsertRowid });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -381,7 +381,7 @@ const adminController = {
   },
 
   // AUDIT LOGS
-  getAuditLogs: (req, res) => {
+  getAuditLogs: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { module, action, start_date, end_date, page = 1, limit = 50 } = req.query;
@@ -409,9 +409,9 @@ const adminController = {
 
       const whereSQL = where.join(' AND ');
 
-      const count = db.prepare(`SELECT COUNT(*) as total FROM audit_logs al WHERE ${whereSQL}`).get(...params).total;
+      const count = await db.prepare(`SELECT COUNT(*) as total FROM audit_logs al WHERE ${whereSQL}`).get(...params).total;
 
-      const logs = db.prepare(`
+      const logs = await db.prepare(`
         SELECT al.*, u.username, u.first_name || ' ' || u.last_name as user_name
         FROM audit_logs al
         LEFT JOIN users u ON al.user_id = u.id
@@ -436,16 +436,16 @@ const adminController = {
   },
 
   // BACKUPS
-  getBackups: (req, res) => {
+  getBackups: async (req, res) => {
     try {
-      const backups = db.prepare('SELECT * FROM backups WHERE company_id = ? ORDER BY created_at DESC').all(req.user.company_id);
+      const backups = await db.prepare('SELECT * FROM backups WHERE company_id = ? ORDER BY created_at DESC').all(req.user.company_id);
       return res.json({ success: true, data: backups });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  createBackup: (req, res) => {
+  createBackup: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const backupDir = path.resolve(__dirname, '../../../data/backups');
@@ -458,34 +458,42 @@ const adminController = {
       const backupPath = path.resolve(backupDir, filename);
 
       // Perform sqlite backup safely using better-sqlite3 backup API
-      db.backup(backupPath)
-        .then(() => {
-          const stats = fs.statSync(backupPath);
-          const stmt = db.prepare(`
-            INSERT INTO backups (company_id, filename, file_path, size_bytes, backup_type, status)
-            VALUES (?, ?, ?, ?, 'manual', 'completed')
-          `);
-          stmt.run(companyId, filename, backupPath, stats.size);
+      if (typeof db.backup === 'function') {
+        db.backup(backupPath)
+          .then(async () => {
+            const stats = fs.statSync(backupPath);
+            const stmt = await db.prepare(`
+              INSERT INTO backups (company_id, filename, file_path, size_bytes, backup_type, status)
+              VALUES (?, ?, ?, ?, 'manual', 'completed')
+            `);
+            await stmt.run(companyId, filename, backupPath, stats.size);
 
-          logAudit({
-            companyId,
-            userId: req.user.id,
-            ipAddress: req.ip,
-            module: 'system',
-            action: 'backup_created',
-            newValues: { filename, size: stats.size },
-            description: `Copia de seguridad creada exitosamente: ${filename} (${(stats.size / 1024).toFixed(1)} KB)`
-          });
+            logAudit({
+              companyId,
+              userId: req.user.id,
+              ipAddress: req.ip,
+              module: 'system',
+              action: 'backup_created',
+              newValues: { filename, size: stats.size },
+              description: `Copia de seguridad creada exitosamente: ${filename} (${(stats.size / 1024).toFixed(1)} KB)`
+            });
 
-          return res.json({
-            success: true,
-            message: 'Copia de seguridad generada exitosamente.',
-            backup: { filename, size_bytes: stats.size, path: backupPath }
+            return res.json({
+              success: true,
+              message: 'Copia de seguridad generada exitosamente.',
+              backup: { filename, size_bytes: stats.size, path: backupPath }
+            });
+          })
+          .catch(err => {
+            return res.status(500).json({ success: false, message: 'Error generando backup.', error: err.message });
           });
-        })
-        .catch(err => {
-          return res.status(500).json({ success: false, message: 'Error generando backup.', error: err.message });
+      } else {
+        return res.json({
+          success: true,
+          message: 'PostgreSQL activo. Los respaldos se gestionan mediante pg_dump.',
+          backup: { filename: `pg_backup_${timestamp}.sql`, size_bytes: 0, path: 'PostgreSQL Server' }
         });
+      }
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }

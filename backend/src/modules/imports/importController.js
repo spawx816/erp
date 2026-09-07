@@ -2,7 +2,7 @@ const { db, runTransaction } = require('../../database/db');
 const { logAudit } = require('../../middlewares/audit');
 
 const importController = {
-  previewAndValidate: (req, res) => {
+  previewAndValidate: async (req, res) => {
     try {
       const { entity_type, rows = [] } = req.body;
       if (!entity_type || !rows || rows.length === 0) {
@@ -48,7 +48,7 @@ const importController = {
     }
   },
 
-  executeImport: (req, res) => {
+  executeImport: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { entity_type, rows = [] } = req.body;
@@ -57,20 +57,20 @@ const importController = {
         return res.status(400).json({ success: false, message: 'Datos insuficientes para importar.' });
       }
 
-      const summary = runTransaction(() => {
+      const summary = await runTransaction(async () => {
         let successCount = 0;
         let failCount = 0;
         const details = [];
 
         if (entity_type === 'products') {
-          const stmt = db.prepare(`
+          const stmt = await db.prepare(`
             INSERT OR IGNORE INTO products (
               company_id, name, sku, barcode, cost, price, stock_min, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
           `);
           for (const r of rows) {
             try {
-              stmt.run(companyId, r.name, r.sku, r.barcode || null, Number(r.cost || 0), Number(r.price || 0), Number(r.stock_min || 5));
+              await stmt.run(companyId, r.name, r.sku, r.barcode || null, Number(r.cost || 0), Number(r.price || 0), Number(r.stock_min || 5));
               successCount++;
             } catch (e) {
               failCount++;
@@ -78,14 +78,14 @@ const importController = {
             }
           }
         } else if (entity_type === 'customers') {
-          const stmt = db.prepare(`
+          const stmt = await db.prepare(`
             INSERT OR IGNORE INTO customers (
               company_id, person_type, first_name, last_name, company_name, tax_id, id_card, phone, email, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
           `);
           for (const r of rows) {
             try {
-              stmt.run(
+              await stmt.run(
                 companyId, r.person_type || 'natural', r.first_name || null, r.last_name || null,
                 r.company_name || null, r.tax_id || null, r.id_card || null, r.phone || null, r.email || null
               );
@@ -98,7 +98,7 @@ const importController = {
         }
 
         // Log import
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO import_logs (company_id, user_id, entity_type, total_rows, success_rows, error_rows, error_details)
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(companyId, req.user.id, entity_type, rows.length, successCount, failCount, JSON.stringify(details));

@@ -2,7 +2,7 @@ const { db } = require('../../database/db');
 const { logAudit } = require('../../middlewares/audit');
 
 const fiscalController = {
-  getSequences: (req, res) => {
+  getSequences: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { branch_id } = req.query;
@@ -14,7 +14,7 @@ const fiscalController = {
         params.push(branch_id);
       }
 
-      const sequences = db.prepare(`
+      const sequences = await db.prepare(`
         SELECT s.*, b.name as branch_name, fdt.name as document_type_name
         FROM fiscal_sequences s
         JOIN branches b ON s.branch_id = b.id
@@ -29,16 +29,16 @@ const fiscalController = {
     }
   },
 
-  getDocumentTypes: (req, res) => {
+  getDocumentTypes: async (req, res) => {
     try {
-      const types = db.prepare('SELECT * FROM fiscal_document_types WHERE company_id = ?').all(req.user.company_id);
+      const types = await db.prepare('SELECT * FROM fiscal_document_types WHERE company_id = ?').all(req.user.company_id);
       return res.json({ success: true, data: types });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  createSequence: (req, res) => {
+  createSequence: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { branch_id, fiscal_type_code, series = 'B', prefix, current_number = 1, final_number, expiration_date, warning_threshold = 50 } = req.body;
@@ -49,14 +49,14 @@ const fiscalController = {
 
       const cleanPrefix = prefix || fiscal_type_code;
 
-      const stmt = db.prepare(`
+      const stmt = await db.prepare(`
         INSERT INTO fiscal_sequences (
           company_id, branch_id, fiscal_type_code, series, prefix,
           current_number, final_number, expiration_date, warning_threshold, status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
       `);
 
-      const result = stmt.run(companyId, branch_id, fiscal_type_code, series, cleanPrefix, current_number, final_number, expiration_date || null, warning_threshold);
+      const result = await stmt.run(companyId, branch_id, fiscal_type_code, series, cleanPrefix, current_number, final_number, expiration_date || null, warning_threshold);
 
       logAudit({
         companyId,

@@ -5,9 +5,9 @@ const FiscalService = {
    * Generates the next atomic Dominican NCF number
    * Format: B0100000001 (11 characters)
    */
-  getNextNCF: (companyId, branchId, fiscalTypeCode) => {
+  getNextNCF: async (companyId, branchId, fiscalTypeCode) => {
     // 1. Fetch sequence
-    const seq = db.prepare(`
+    const seq = await db.prepare(`
       SELECT * FROM fiscal_sequences
       WHERE branch_id = ? AND fiscal_type_code = ? AND status = 'active'
     `).get(branchId, fiscalTypeCode);
@@ -33,7 +33,7 @@ const FiscalService = {
     const ncf = `${seq.prefix}${padded}`;
 
     // 3. Atomically increment sequence
-    db.prepare(`
+    await db.prepare(`
       UPDATE fiscal_sequences
       SET current_number = current_number + 1
       WHERE id = ?

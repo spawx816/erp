@@ -4,7 +4,7 @@ const InventoryService = {
   /**
    * Adjusts stock and logs an immutable Kardex movement
    */
-  recordMovement: ({
+  recordMovement: async ({
     companyId,
     branchId,
     warehouseId,
@@ -20,7 +20,7 @@ const InventoryService = {
     reason = ''
   }) => {
     // 1. Get current stock
-    let currentInv = db.prepare(`
+    let currentInv = await db.prepare(`
       SELECT id, quantity, reserved_quantity
       FROM inventories
       WHERE warehouse_id = ? AND product_id = ? AND (variant_id = ? OR (variant_id IS NULL AND ? IS NULL))
@@ -32,7 +32,7 @@ const InventoryService = {
 
     // 2. Check negative stock constraint
     if (newQty < 0) {
-      const comp = db.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
+      const comp = await db.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
       if (!comp || comp.allow_negative_inventory === 0) {
         throw new Error(`Inventario insuficiente. Stock actual: ${prevQty}, Solicitado: ${Math.abs(changeQty)}`);
       }
@@ -40,13 +40,13 @@ const InventoryService = {
 
     // 3. Upsert inventory
     if (currentInv) {
-      db.prepare(`
+      await db.prepare(`
         UPDATE inventories
         SET quantity = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).run(newQty, currentInv.id);
     } else {
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO inventories (company_id, branch_id, warehouse_id, product_id, variant_id, quantity)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(companyId, branchId, warehouseId, productId, variantId, newQty);
@@ -54,7 +54,7 @@ const InventoryService = {
 
     // 4. Record Kardex movement
     const totalCost = Math.abs(changeQty) * Number(unitCost);
-    const movResult = db.prepare(`
+    const movResult = await db.prepare(`
       INSERT INTO inventory_movements (
         company_id, branch_id, warehouse_id, to_warehouse_id,
         product_id, variant_id, user_id, movement_type,
@@ -76,8 +76,8 @@ const InventoryService = {
     };
   },
 
-  getCurrentStock: (warehouseId, productId, variantId = null) => {
-    const row = db.prepare(`
+  getCurrentStock: async (warehouseId, productId, variantId = null) => {
+    const row = await db.prepare(`
       SELECT quantity, reserved_quantity
       FROM inventories
       WHERE warehouse_id = ? AND product_id = ? AND (variant_id = ? OR (variant_id IS NULL AND ? IS NULL))

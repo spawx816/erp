@@ -2,11 +2,11 @@ const { db } = require('../../database/db');
 const { logAudit } = require('../../middlewares/audit');
 
 const settingsController = {
-  getCompanySettings: (req, res) => {
+  getCompanySettings: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(companyId);
-      const settings = db.prepare('SELECT key, value FROM settings WHERE company_id = ?').all(companyId);
+      const company = await db.prepare('SELECT * FROM companies WHERE id = ?').get(companyId);
+      const settings = await db.prepare('SELECT key, value FROM settings WHERE company_id = ?').all(companyId);
 
       const settingsMap = {};
       settings.forEach(s => { settingsMap[s.key] = s.value; });
@@ -17,7 +17,7 @@ const settingsController = {
     }
   },
 
-  updateCompanySettings: (req, res) => {
+  updateCompanySettings: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const {
@@ -26,7 +26,7 @@ const settingsController = {
         receipt_footer, print_format, smtp_host, smtp_port, smtp_user
       } = req.body;
 
-      db.prepare(`
+      await db.prepare(`
         UPDATE companies SET
           name = COALESCE(?, name),
           legal_name = COALESCE(?, legal_name),
@@ -49,17 +49,17 @@ const settingsController = {
 
       // Save custom settings
       const customKeys = { receipt_footer, print_format, smtp_host, smtp_port, smtp_user };
-      const stmtSet = db.prepare(`
+      const stmtSet = await db.prepare(`
         INSERT INTO settings (company_id, key, value, updated_at)
         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(company_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
       `);
 
-      Object.entries(customKeys).forEach(([k, v]) => {
+      for (const [k, v] of Object.entries(customKeys)) {
         if (v !== undefined && v !== null) {
-          stmtSet.run(companyId, k, String(v));
+          await stmtSet.run(companyId, k, String(v));
         }
-      });
+      }
 
       logAudit({
         companyId,

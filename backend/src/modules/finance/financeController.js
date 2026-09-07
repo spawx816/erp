@@ -3,7 +3,7 @@ const { logAudit } = require('../../middlewares/audit');
 
 const financeController = {
   // ACCOUNTS RECEIVABLE (CxC)
-  getReceivables: (req, res) => {
+  getReceivables: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { customer_id, status, aging_bracket } = req.query;
@@ -22,7 +22,7 @@ const financeController = {
         whereClauses.push("ar.status != 'paid'");
       }
 
-      const receivables = db.prepare(`
+      const receivables = await db.prepare(`
         SELECT ar.*,
                COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                c.phone as customer_phone, c.tax_id as customer_tax_id,
@@ -70,10 +70,10 @@ const financeController = {
   },
 
   // CxC AGING TABLE (SEMÁFORO 0-120+ CON AGRUPACIÓN POR CLIENTE)
-  getCxCAgingTable: (req, res) => {
+  getCxCAgingTable: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const receivables = db.prepare(`
+      const receivables = await db.prepare(`
         SELECT ar.*,
                COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                c.code as customer_code,
@@ -170,7 +170,7 @@ const financeController = {
       return res.status(500).json({ success: false, message: 'Error generando matriz de antigüedad de saldos.', error: err.message });
     }
   },
-  receivePayment: (req, res) => {
+  receivePayment: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const branchId = req.user.branch_id;
@@ -192,7 +192,7 @@ const financeController = {
       // If cash, verify open session
       let activeSession = null;
       if (payment_method === 'cash') {
-        activeSession = db.prepare(`
+        activeSession = await db.prepare(`
           SELECT id FROM cash_sessions
           WHERE user_id = ? AND branch_id = ? AND status = 'open'
         `).get(userId, branchId);
@@ -208,9 +208,9 @@ const financeController = {
       const paymentNumber = `RC-${Date.now().toString().slice(-6)}`;
       const paymentDate = new Date().toISOString().split('T')[0];
 
-      const paymentId = runTransaction(() => {
+      const paymentId = await runTransaction(async () => {
         // 1. Insert Payment
-        const stmtPay = db.prepare(`
+        const stmtPay = await db.prepare(`
           INSERT INTO receivable_payments (
             company_id, branch_id, customer_id, cash_session_id, user_id,
             payment_number, payment_date, total_amount, payment_method, reference_number, notes
@@ -229,7 +229,7 @@ const financeController = {
         // If no explicit allocations provided, auto-apply FIFO to oldest pending invoices
         let targetAllocations = allocations;
         if (!targetAllocations || targetAllocations.length === 0) {
-          const pendingInvoices = db.prepare(`
+          const pendingInvoices = await db.prepare(`
             SELECT id, balance FROM accounts_receivable
             WHERE customer_id = ? AND status != 'paid'
             ORDER BY due_date ASC
@@ -244,7 +244,7 @@ const financeController = {
           }
         }
 
-        const stmtAlloc = db.prepare(`
+        const stmtAlloc = await db.prepare(`
           INSERT INTO payment_allocations (payment_id, receivable_id, amount_applied)
           VALUES (?, ?, ?)
         `);
@@ -256,11 +256,11 @@ const financeController = {
           stmtAlloc.run(pId, alloc.receivable_id, applied);
 
           // Update receivable balance
-          const ar = db.prepare('SELECT balance FROM accounts_receivable WHERE id = ?').get(alloc.receivable_id);
+          const ar = await db.prepare('SELECT balance FROM accounts_receivable WHERE id = ?').get(alloc.receivable_id);
           const newBal = Math.max(0, Number(ar.balance) - applied);
           const newStatus = newBal === 0 ? 'paid' : 'partial';
 
-          db.prepare(`
+          await db.prepare(`
             UPDATE accounts_receivable
             SET balance = ?, status = ?
             WHERE id = ?
@@ -268,11 +268,11 @@ const financeController = {
         }
 
         // 3. Deduct customer balance
-        db.prepare('UPDATE customers SET current_balance = MAX(0, current_balance - ?) WHERE id = ?').run(total_amount, customer_id);
+        await db.prepare('UPDATE customers SET current_balance = MAX(0, current_balance - ?) WHERE id = ?').run(total_amount, customer_id);
 
         // 4. If cash, record cash movement
         if (payment_method === 'cash' && activeSession) {
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
             VALUES (?, ?, 'cxc_payment', ?, ?, 'receivable_payments', ?)
           `).run(activeSession.id, userId, total_amount, `Cobro CxC Recibo #${paymentNumber}`, pId);
@@ -299,7 +299,7 @@ const financeController = {
   },
 
   // ACCOUNTS PAYABLE (CxP)
-  getPayables: (req, res) => {
+  getPayables: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { supplier_id, status } = req.query;
@@ -318,7 +318,7 @@ const financeController = {
         whereClauses.push("ap.status != 'paid'");
       }
 
-      const payables = db.prepare(`
+      const payables = await db.prepare(`
         SELECT ap.*,
                s.company_name as supplier_name, s.phone as supplier_phone, s.tax_id as supplier_tax_id,
                b.name as branch_name,
@@ -340,7 +340,7 @@ const financeController = {
   },
 
   // PAY TO SUPPLIER
-  paySupplier: (req, res) => {
+  paySupplier: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const userId = req.user.id;
@@ -350,7 +350,7 @@ const financeController = {
         return res.status(400).json({ success: false, message: 'Cuenta por pagar y monto requeridos.' });
       }
 
-      const payable = db.prepare('SELECT * FROM accounts_payable WHERE id = ? AND company_id = ?').get(payable_id, companyId);
+      const payable = await db.prepare('SELECT * FROM accounts_payable WHERE id = ? AND company_id = ?').get(payable_id, companyId);
       if (!payable) return res.status(404).json({ success: false, message: 'Cuenta por pagar no encontrada.' });
 
       const amt = Number(amount);
@@ -358,10 +358,10 @@ const financeController = {
         return res.status(400).json({ success: false, message: `El monto excede el saldo pendiente (${payable.balance}).` });
       }
 
-      runTransaction(() => {
+      await runTransaction(async () => {
         const paymentDate = new Date().toISOString().split('T')[0];
 
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO payable_payments (payable_id, company_id, user_id, payment_date, amount, payment_method, reference_number, notes)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(payable_id, companyId, userId, paymentDate, amt, payment_method, reference_number || null, notes || null);
@@ -369,14 +369,14 @@ const financeController = {
         const newBal = Number(payable.balance) - amt;
         const newStatus = newBal <= 0.01 ? 'paid' : 'partial';
 
-        db.prepare(`
+        await db.prepare(`
           UPDATE accounts_payable
           SET balance = ?, status = ?
           WHERE id = ?
         `).run(newBal, newStatus, payable_id);
 
         // Update supplier balance
-        db.prepare('UPDATE suppliers SET current_balance = MAX(0, current_balance - ?) WHERE id = ?').run(amt, payable.supplier_id);
+        await db.prepare('UPDATE suppliers SET current_balance = MAX(0, current_balance - ?) WHERE id = ?').run(amt, payable.supplier_id);
 
         logAudit({
           companyId,
@@ -397,7 +397,7 @@ const financeController = {
   },
 
   // EXPENSES
-  getExpenses: (req, res) => {
+  getExpenses: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { category_id, branch_id, start_date, end_date } = req.query;
@@ -421,7 +421,7 @@ const financeController = {
         params.push(end_date);
       }
 
-      const expenses = db.prepare(`
+      const expenses = await db.prepare(`
         SELECT e.*, ec.name as category_name, b.name as branch_name,
                u.first_name || ' ' || u.last_name as user_name
         FROM expenses e
@@ -438,7 +438,7 @@ const financeController = {
     }
   },
 
-  createExpense: (req, res) => {
+  createExpense: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const branchId = req.user.branch_id;
@@ -452,20 +452,20 @@ const financeController = {
 
       let activeSession = null;
       if (payment_method === 'cash') {
-        activeSession = db.prepare('SELECT id FROM cash_sessions WHERE user_id = ? AND branch_id = ? AND status = "open"').get(userId, branchId);
+        activeSession = await db.prepare('SELECT id FROM cash_sessions WHERE user_id = ? AND branch_id = ? AND status = "open"').get(userId, branchId);
       }
 
       const expenseDate = new Date().toISOString().split('T')[0];
 
-      runTransaction(() => {
-        const stmt = db.prepare(`
+      await runTransaction(async () => {
+        const stmt = await db.prepare(`
           INSERT INTO expenses (
             company_id, branch_id, category_id, user_id, cash_session_id,
             amount, payment_method, beneficiary, voucher_number, notes, expense_date
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        const resExp = stmt.run(
+        const resExp = await stmt.run(
           companyId, branchId, category_id, userId, activeSession ? activeSession.id : null,
           amount, payment_method, beneficiary || null, voucher_number || null, notes || null, expenseDate
         );
@@ -473,7 +473,7 @@ const financeController = {
 
         // If cash, deduct from active session
         if (payment_method === 'cash' && activeSession) {
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
             VALUES (?, ?, 'expense', ?, ?, 'expenses', ?)
           `).run(activeSession.id, userId, amount, `Gasto: ${notes || beneficiary || 'Salida de caja'}`, expId);
@@ -497,9 +497,9 @@ const financeController = {
     }
   },
 
-  getExpenseCategories: (req, res) => {
+  getExpenseCategories: async (req, res) => {
     try {
-      const categories = db.prepare('SELECT * FROM expense_categories WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
+      const categories = await db.prepare('SELECT * FROM expense_categories WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
       return res.json({ success: true, data: categories });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -507,11 +507,11 @@ const financeController = {
   },
 
   // CXC AGING TABLE (Antigüedad de saldos agrupada por cliente con drill-down)
-  getCxCAgingTable: (req, res) => {
+  getCxCAgingTable: async (req, res) => {
     try {
       const companyId = req.user.company_id;
 
-      const customersWithBalances = db.prepare(`
+      const customersWithBalances = await db.prepare(`
         SELECT c.id as customer_id, c.code, c.company_name, c.first_name, c.last_name, c.phone,
                sp.name as salesperson_name,
                sp.code as salesperson_code,
@@ -610,10 +610,10 @@ const financeController = {
   },
 
   // RECURRING EXPENSES (PAGOS FIJOS)
-  getRecurringExpenses: (req, res) => {
+  getRecurringExpenses: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const recurring = db.prepare(`
+      const recurring = await db.prepare(`
         SELECT re.*, ec.name as category_name
         FROM recurring_expenses re
         LEFT JOIN expense_categories ec ON re.category_id = ec.id
@@ -650,7 +650,7 @@ const financeController = {
     }
   },
 
-  createRecurringExpense: (req, res) => {
+  createRecurringExpense: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before } = req.body;
@@ -659,11 +659,11 @@ const financeController = {
         return res.status(400).json({ success: false, message: 'Concepto, monto y próxima fecha son obligatorios.' });
       }
 
-      const stmt = db.prepare(`
+      const stmt = await db.prepare(`
         INSERT INTO recurring_expenses (company_id, category_id, concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, alert_days_before, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
       `);
-      const r = stmt.run(companyId, category_id || null, concept, estimated_amount, frequency || 'monthly', due_day || 15, next_due_date, responsible_person || null, alert_days_before || 7);
+      const r = await stmt.run(companyId, category_id || null, concept, estimated_amount, frequency || 'monthly', due_day || 15, next_due_date, responsible_person || null, alert_days_before || 7);
 
       return res.status(201).json({ success: true, message: 'Obligación recurrente configurada.', id: r.lastInsertRowid });
     } catch (err) {
@@ -671,13 +671,13 @@ const financeController = {
     }
   },
 
-  updateRecurringExpense: (req, res) => {
+  updateRecurringExpense: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
       const { concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before, status } = req.body;
 
-      db.prepare(`
+      await db.prepare(`
         UPDATE recurring_expenses
         SET concept = COALESCE(?, concept),
             estimated_amount = COALESCE(?, estimated_amount),
@@ -697,13 +697,13 @@ const financeController = {
     }
   },
 
-  payRecurringExpense: (req, res) => {
+  payRecurringExpense: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
       const { payment_method = 'transfer', voucher_number, notes } = req.body;
 
-      const recurring = db.prepare(`SELECT * FROM recurring_expenses WHERE id = ? AND company_id = ?`).get(id, companyId);
+      const recurring = await db.prepare(`SELECT * FROM recurring_expenses WHERE id = ? AND company_id = ?`).get(id, companyId);
       if (!recurring) return res.status(404).json({ success: false, message: 'Obligación no encontrada.' });
 
       const today = new Date().toISOString().split('T')[0];
@@ -713,15 +713,15 @@ const financeController = {
       curDue.setMonth(curDue.getMonth() + 1);
       const nextDueStr = curDue.toISOString().split('T')[0];
 
-      runTransaction(() => {
+      await runTransaction(async () => {
         // Register in expenses
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO expenses (company_id, category_id, user_id, amount, payment_method, beneficiary, voucher_number, notes, expense_date)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(companyId, recurring.category_id, req.user.id, recurring.estimated_amount, payment_method, recurring.responsible_person, voucher_number || null, notes || `Pago recurrente: ${recurring.concept}`, today);
 
         // Update recurring obligation
-        db.prepare(`
+        await db.prepare(`
           UPDATE recurring_expenses
           SET last_paid_date = ?, next_due_date = ?, status = 'pending'
           WHERE id = ?

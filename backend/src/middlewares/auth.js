@@ -3,7 +3,7 @@ const { db } = require('../database/db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'sgc_super_secret_enterprise_jwt_key_2026';
 
-function authenticateToken(req, res, next) {
+async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
@@ -15,7 +15,7 @@ function authenticateToken(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     
     // Verify user still exists and is active
-    const user = db.prepare(`
+    const user = await db.prepare(`
       SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email, u.max_discount_percentage, u.status,
              r.name as role_name, r.slug as role_slug,
              c.name as company_name, c.currency, c.currency_symbol, c.allow_negative_inventory
@@ -30,19 +30,19 @@ function authenticateToken(req, res, next) {
     }
 
     // Load user permissions
-    const permissions = db.prepare(`
+    const permissions = (await db.prepare(`
       SELECT p.slug
       FROM role_permissions rp
       JOIN permissions p ON rp.permission_id = p.id
       WHERE rp.role_id = ?
-    `).all(user.role_id).map(row => row.slug);
+    `).all(user.role_id)).map(row => row.slug);
 
     user.permissions = permissions;
     
     // If client supplied custom branch header, verify authorization
     const customBranchId = req.headers['x-branch-id'];
     if (customBranchId) {
-      const branchAuth = db.prepare(`
+      const branchAuth = await db.prepare(`
         SELECT branch_id FROM user_branches WHERE user_id = ? AND branch_id = ?
       `).get(user.id, customBranchId);
       if (branchAuth || user.role_slug === 'super-admin') {

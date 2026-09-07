@@ -5,7 +5,7 @@ const FiscalService = require('../fiscal/fiscalService');
 const { logAudit } = require('../../middlewares/audit');
 
 const salesController = {
-  getSales: (req, res) => {
+  getSales: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { search, customer_id, branch_id, status, sale_type, start_date, end_date, page = 1, limit = 50 } = req.query;
@@ -45,14 +45,14 @@ const salesController = {
 
       const whereSQL = whereClauses.join(' AND ');
 
-      const count = db.prepare(`
+      const count = await db.prepare(`
         SELECT COUNT(*) as total
         FROM sales s
         JOIN customers c ON s.customer_id = c.id
         WHERE ${whereSQL}
       `).get(...params).total;
 
-      const sales = db.prepare(`
+      const sales = await db.prepare(`
         SELECT s.*,
                COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                c.tax_id as customer_tax_id, c.id_card as customer_id_card,
@@ -85,12 +85,12 @@ const salesController = {
     }
   },
 
-  getSaleById: (req, res) => {
+  getSaleById: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
 
-      const sale = db.prepare(`
+      const sale = await db.prepare(`
         SELECT s.*,
                COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                c.tax_id as customer_tax_id, c.id_card as customer_id_card, c.phone as customer_phone, c.address as customer_address,
@@ -109,8 +109,8 @@ const salesController = {
         return res.status(404).json({ success: false, message: 'Venta no encontrada.' });
       }
 
-      sale.items = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(id);
-      sale.payments = db.prepare('SELECT * FROM sale_payments WHERE sale_id = ?').all(id);
+      sale.items = await db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(id);
+      sale.payments = await db.prepare('SELECT * FROM sale_payments WHERE sale_id = ?').all(id);
 
       return res.json({ success: true, data: sale });
     } catch (err) {
@@ -119,10 +119,10 @@ const salesController = {
   },
 
   // POS CHECKOUT
-  checkout: (req, res) => {
+  checkout: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const targetWarehouse = req.body?.warehouse_id ? db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(req.body.warehouse_id) : null;
+      const targetWarehouse = req.body?.warehouse_id ? await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(req.body.warehouse_id) : null;
       const branchId = targetWarehouse?.branch_id || (req.headers['x-branch-id'] ? parseInt(req.headers['x-branch-id'], 10) : null) || req.user.branch_id || 1;
       const userId = req.user.id;
 
@@ -158,7 +158,7 @@ const salesController = {
         }
 
         // Validate supervisor credentials
-        const supervisor = db.prepare(`
+        const supervisor = await db.prepare(`
           SELECT u.id, u.password_hash, u.max_discount_percentage, r.slug as role_slug
           FROM users u
           JOIN roles r ON u.role_id = r.id
@@ -183,14 +183,14 @@ const salesController = {
       const hasCashPayment = payments.some(p => p.payment_method === 'cash');
       let activeSession = null;
       if (hasCashPayment) {
-        activeSession = db.prepare(`
+        activeSession = await db.prepare(`
           SELECT id FROM cash_sessions
           WHERE user_id = ? AND branch_id = ? AND status = 'open'
         `).get(userId, branchId);
 
         if (!activeSession) {
           // Look for any open register session in the target branch or any active session
-          const branchSession = db.prepare(`
+          const branchSession = await db.prepare(`
             SELECT id FROM cash_sessions
             WHERE (branch_id = ? OR branch_id IS NULL) AND status = 'open'
             ORDER BY id DESC
@@ -199,7 +199,7 @@ const salesController = {
           if (branchSession) {
             activeSession = branchSession;
           } else {
-            const anySession = db.prepare(`SELECT id FROM cash_sessions WHERE status = 'open' ORDER BY id DESC`).get();
+            const anySession = await db.prepare(`SELECT id FROM cash_sessions WHERE status = 'open' ORDER BY id DESC`).get();
             if (anySession) {
               activeSession = anySession;
             } else {
@@ -213,7 +213,7 @@ const salesController = {
       }
 
       // TRANSACTION EXECUTION
-      const saleResult = runTransaction(() => {
+      const saleResult = await runTransaction(async () => {
         // 1. Calculate Totals and Validate Inventory
         let subtotal = 0;
         let totalDiscount = 0;
@@ -223,13 +223,13 @@ const salesController = {
         const preparedItems = [];
         for (const item of items) {
           // Check stock if physical
-          const prod = db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id);
+          const prod = await db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id);
           if (!prod) throw new Error(`Producto ID ${item.product_id} no encontrado.`);
 
           if (prod.type === 'physical') {
             const currentStock = InventoryService.getCurrentStock(warehouse_id, item.product_id, item.variant_id || null);
             if (currentStock < Number(item.quantity)) {
-              const comp = db.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
+              const comp = await db.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
               if (!comp || comp.allow_negative_inventory === 0) {
                 throw new Error(`Inventario insuficiente para [${prod.name}]. Disponible: ${currentStock}, Solicitado: ${item.quantity}`);
               }
@@ -295,7 +295,7 @@ const salesController = {
         const changeGiven = Math.max(0, totalTendered - totalPaid);
 
         // 3. Customer and credit checks
-        const cust = db.prepare('SELECT salesperson_id, credit_days, credit_limit, current_balance, is_credit_blocked, requires_special_auth, allow_sales_with_overdue_invoices FROM customers WHERE id = ?').get(customer_id);
+        const cust = await db.prepare('SELECT salesperson_id, credit_days, credit_limit, current_balance, is_credit_blocked, requires_special_auth, allow_sales_with_overdue_invoices FROM customers WHERE id = ?').get(customer_id);
         const salespersonId = cust ? cust.salesperson_id : null;
         const creditDays = cust && cust.credit_days ? cust.credit_days : 30;
         const dueDate = new Date();
@@ -312,7 +312,7 @@ const salesController = {
         const invoiceNumber = `FAC-${Date.now().toString().slice(-6)}`;
 
         // 5. Insert Sale
-        const stmtSale = db.prepare(`
+        const stmtSale = await db.prepare(`
           INSERT INTO sales (
             company_id, branch_id, warehouse_id, cash_session_id, customer_id, salesperson_id, user_id,
             sale_number, invoice_number, ncf, fiscal_type_code, sale_type,
@@ -330,13 +330,13 @@ const salesController = {
         const saleId = resSale.lastInsertRowid;
 
         // Log sequence usage
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO fiscal_sequence_logs (fiscal_sequence_id, ncf, reference_type, reference_id, user_id)
           VALUES (?, ?, 'sales', ?, ?)
         `).run(fiscalInfo.sequenceId, fiscalInfo.ncf, saleId, userId);
 
         // 6. Insert Sale Items and deduct stock (Kardex)
-        const stmtItem = db.prepare(`
+        const stmtItem = await db.prepare(`
           INSERT INTO sale_items (
             sale_id, product_id, variant_id, product_name, quantity, unit_cost, unit_price,
             discount_percent, discount_amount, subtotal, tax_rate, tax_amount, total
@@ -369,29 +369,29 @@ const salesController = {
         }
 
         // 7. Insert Payments
-        const stmtPayment = db.prepare(`
+        const stmtPayment = await db.prepare(`
           INSERT INTO sale_payments (sale_id, payment_method, amount, tendered, change_given, reference_number, card_last_digits)
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `);
 
-        payments.forEach(p => {
-          stmtPayment.run(
+        for (const p of payments) {
+          await stmtPayment.run(
             saleId, p.payment_method, p.amount, p.tendered || p.amount,
             p.payment_method === 'cash' ? changeGiven : 0,
             p.reference_number || null, p.card_last_digits || null
           );
 
           if (p.payment_method === 'cash' && activeSession) {
-            db.prepare(`
+            await db.prepare(`
               INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
               VALUES (?, ?, 'sale_cash', ?, ?, 'sales', ?)
             `).run(activeSession.id, userId, p.amount, `Venta en mostrador ${saleNumber}`, saleId);
           }
-        });
+        }
 
         // 8. If credit, generate Accounts Receivable (CxC) & update customer current_balance
         if (hasCreditPayment) {
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO accounts_receivable (
               company_id, branch_id, customer_id, sale_id, invoice_number, ncf,
               issue_date, due_date, amount, balance, status
@@ -401,15 +401,15 @@ const salesController = {
             issueDateStr, dueDateStr, total, balanceAmount, initialStatus
           );
 
-          db.prepare('UPDATE customers SET current_balance = current_balance + ? WHERE id = ?').run(balanceAmount, customer_id);
+          await db.prepare('UPDATE customers SET current_balance = current_balance + ? WHERE id = ?').run(balanceAmount, customer_id);
         }
 
         // 9. Commission calculation for assigned salesperson
         if (salespersonId) {
-          const sp = db.prepare('SELECT commission_rate FROM salespeople WHERE id = ?').get(salespersonId);
+          const sp = await db.prepare('SELECT commission_rate FROM salespeople WHERE id = ?').get(salespersonId);
           const rate = sp ? Number(sp.commission_rate) : 5.00;
           const commAmt = Math.round((subtotal * (rate / 100)) * 100) / 100;
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO commissions (company_id, salesperson_id, sale_id, invoice_number, base_amount, commission_rate, commission_amount, calculation_type, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'invoiced', 'pending')
           `).run(companyId, salespersonId, saleId, invoiceNumber, subtotal, rate, commAmt);
@@ -417,7 +417,7 @@ const salesController = {
 
         // 8. If authorized discount was used, log it
         if (discPercent > Number(req.user.max_discount_percentage)) {
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO discount_authorizations (
               company_id, sale_id, requested_by_user_id, authorized_by_user_id,
               requested_percent, discount_amount, reason, status
@@ -462,7 +462,7 @@ const salesController = {
   },
 
   // CANCEL / REFUND SALE (Generates NCF B04 & Kardex reversal)
-  cancelSale: (req, res) => {
+  cancelSale: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
@@ -476,7 +476,7 @@ const salesController = {
         return res.status(400).json({ success: false, message: `Acción inválida. Usar: ${VALID_ACTIONS.join(', ')}.` });
       }
 
-      const sale = db.prepare(`SELECT * FROM sales WHERE id = ? AND company_id = ?`).get(id, companyId);
+      const sale = await db.prepare(`SELECT * FROM sales WHERE id = ? AND company_id = ?`).get(id, companyId);
       if (!sale) return res.status(404).json({ success: false, message: 'Venta no encontrada.' });
 
       if (sale.status === 'cancelled') {
@@ -485,13 +485,13 @@ const salesController = {
 
       let creditNoteResult = {};
 
-      runTransaction(() => {
+      await runTransaction(async () => {
         // 1. Get NCF B04 for credit note
         const b04 = FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
         const creditNoteNumber = `NC-${Date.now().toString().slice(-6)}`;
 
         // 2. Insert credit note record
-        const stmtNC = db.prepare(`
+        const stmtNC = await db.prepare(`
           INSERT INTO credit_notes (
             company_id, branch_id, warehouse_id, customer_id, user_id, sale_id,
             ncf, credit_note_number, return_type, reason, subtotal, tax_amount, total, action_taken
@@ -505,8 +505,8 @@ const salesController = {
         const ncId = resNC.lastInsertRowid;
 
         // 3. Insert sale items into credit_note_items (FIX: was missing)
-        const items = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
-        const stmtNCI = db.prepare(`
+        const items = await db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
+        const stmtNCI = await db.prepare(`
           INSERT INTO credit_note_items (
             credit_note_id, product_id, variant_id, quantity, unit_price,
             subtotal, tax_rate, tax_amount, total, returned_to_inventory
@@ -527,7 +527,7 @@ const salesController = {
           );
 
           // Return to stock (Kardex)
-          const prod = db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
+          const prod = await db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
           if (prod && prod.type === 'physical') {
             InventoryService.recordMovement({
               companyId,
@@ -547,7 +547,7 @@ const salesController = {
         }
 
         // 4. Cancel accounts receivable (CxC)
-        db.prepare(`
+        await db.prepare(`
           UPDATE accounts_receivable
           SET status = 'paid', balance = 0
           WHERE sale_id = ?
@@ -555,7 +555,7 @@ const salesController = {
 
         // 5. If store_credit, update customer credit_notes_balance (FIX: was never updated)
         if (action_taken === 'store_credit') {
-          db.prepare(`
+          await db.prepare(`
             UPDATE customers
             SET credit_notes_balance = COALESCE(credit_notes_balance, 0) + ?
             WHERE id = ?
@@ -563,7 +563,7 @@ const salesController = {
         }
 
         // 6. Mark sale as cancelled
-        db.prepare(`UPDATE sales SET status = 'cancelled' WHERE id = ?`).run(sale.id);
+        await db.prepare(`UPDATE sales SET status = 'cancelled' WHERE id = ?`).run(sale.id);
 
         // 7. Audit
         logAudit({
@@ -591,7 +591,7 @@ const salesController = {
   },
 
   // CREATE PARTIAL CREDIT NOTE (partial return without full cancellation)
-  createCreditNote: (req, res) => {
+  createCreditNote: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const {
@@ -610,7 +610,7 @@ const salesController = {
         return res.status(400).json({ success: false, message: `Acción inválida. Usar: ${VALID_ACTIONS.join(', ')}.` });
       }
 
-      const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND company_id = ?').get(sale_id, companyId);
+      const sale = await db.prepare('SELECT * FROM sales WHERE id = ? AND company_id = ?').get(sale_id, companyId);
       if (!sale) return res.status(404).json({ success: false, message: 'Venta de referencia no encontrada.' });
       if (sale.status === 'cancelled') {
         return res.status(400).json({ success: false, message: 'No se puede generar Nota de Crédito sobre una venta anulada.' });
@@ -618,7 +618,7 @@ const salesController = {
 
       let creditNoteResult = {};
 
-      runTransaction(() => {
+      await runTransaction(async () => {
         // Calculate totals from items
         let subtotal = 0, taxAmount = 0, total = 0;
         for (const item of items) {
@@ -635,7 +635,7 @@ const salesController = {
         const b04 = FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
         const creditNoteNumber = `NC-${Date.now().toString().slice(-6)}`;
 
-        const resNC = db.prepare(`
+        const resNC = await db.prepare(`
           INSERT INTO credit_notes (
             company_id, branch_id, warehouse_id, customer_id, user_id, sale_id,
             ncf, credit_note_number, return_type, reason, subtotal, tax_amount, total, action_taken
@@ -646,7 +646,7 @@ const salesController = {
         );
         const ncId = resNC.lastInsertRowid;
 
-        const stmtItem = db.prepare(`
+        const stmtItem = await db.prepare(`
           INSERT INTO credit_note_items (
             credit_note_id, product_id, variant_id, quantity, unit_price,
             subtotal, tax_rate, tax_amount, total, returned_to_inventory
@@ -661,7 +661,7 @@ const salesController = {
           const iTax = iSub * (taxRate / 100);
           stmtItem.run(ncId, item.product_id, item.variant_id || null, qty, price, iSub, taxRate, iTax, iSub + iTax);
 
-          const prod = db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
+          const prod = await db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
           if (prod && prod.type === 'physical') {
             InventoryService.recordMovement({
               companyId,
@@ -681,7 +681,7 @@ const salesController = {
         }
 
         if (action_taken === 'store_credit') {
-          db.prepare(`
+          await db.prepare(`
             UPDATE customers SET credit_notes_balance = COALESCE(credit_notes_balance, 0) + ? WHERE id = ?
           `).run(total, sale.customer_id);
         }
@@ -708,10 +708,10 @@ const salesController = {
   },
 
   // QUOTES (Cotizaciones)
-  getQuotes: (req, res) => {
+  getQuotes: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const quotes = db.prepare(`
+      const quotes = await db.prepare(`
         SELECT q.*,
                COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                u.first_name || ' ' || u.last_name as seller_name
@@ -728,7 +728,7 @@ const salesController = {
     }
   },
 
-  createQuote: (req, res) => {
+  createQuote: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const branchId = req.user.branch_id;
@@ -756,8 +756,8 @@ const salesController = {
         total += lineSub + lineTax;
       });
 
-      const qId = runTransaction(() => {
-        const stmtQ = db.prepare(`
+      const qId = await runTransaction(async () => {
+        const stmtQ = await db.prepare(`
           INSERT INTO quotes (
             company_id, branch_id, warehouse_id, customer_id, user_id,
             quote_number, valid_until, subtotal, tax_amount, total, notes, status
@@ -770,7 +770,7 @@ const salesController = {
         );
         const id = resQ.lastInsertRowid;
 
-        const stmtItem = db.prepare(`
+        const stmtItem = await db.prepare(`
           INSERT INTO quote_items (
             quote_id, product_id, variant_id, quantity, unit_price, subtotal, tax_rate, tax_amount, total
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -792,7 +792,7 @@ const salesController = {
   },
 
   // COMMISSIONS
-  getCommissions: (req, res) => {
+  getCommissions: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { salesperson_id, status } = req.query;
@@ -806,7 +806,7 @@ const salesController = {
         where.push('c.status = ?');
         params.push(status);
       }
-      const commissions = db.prepare(`
+      const commissions = await db.prepare(`
         SELECT c.*, sp.name as salesperson_name, sp.code as salesperson_code
         FROM commissions c
         JOIN salespeople sp ON c.salesperson_id = sp.id
@@ -819,7 +819,7 @@ const salesController = {
     }
   },
 
-  payCommissions: (req, res) => {
+  payCommissions: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { commission_ids, receipt_number } = req.body;
@@ -827,7 +827,7 @@ const salesController = {
         return res.status(400).json({ success: false, message: 'Lista de IDs de comisiones requerida.' });
       }
       const placeholders = commission_ids.map(() => '?').join(',');
-      db.prepare(`
+      await db.prepare(`
         UPDATE commissions
         SET status = 'paid', paid_at = CURRENT_TIMESTAMP, receipt_number = ?
         WHERE id IN (${placeholders}) AND company_id = ?
@@ -839,7 +839,7 @@ const salesController = {
   },
 
   // CREDIT NOTES — List all
-  getCreditNotes: (req, res) => {
+  getCreditNotes: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { customer_id, action_taken, return_type, start_date, end_date, search } = req.query;
@@ -857,7 +857,7 @@ const salesController = {
         params.push(`%${search}%`, `%${search}%`, `%${search}%`);
       }
 
-      const creditNotes = db.prepare(`
+      const creditNotes = await db.prepare(`
         SELECT
           cn.*,
           COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) AS customer_name,
@@ -880,12 +880,12 @@ const salesController = {
   },
 
   // CREDIT NOTES — Detail with items
-  getCreditNoteById: (req, res) => {
+  getCreditNoteById: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
 
-      const cn = db.prepare(`
+      const cn = await db.prepare(`
         SELECT
           cn.*,
           COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) AS customer_name,
@@ -904,7 +904,7 @@ const salesController = {
 
       if (!cn) return res.status(404).json({ success: false, message: 'Nota de Crédito no encontrada.' });
 
-      const items = db.prepare(`
+      const items = await db.prepare(`
         SELECT
           cni.*,
           p.name AS product_name,

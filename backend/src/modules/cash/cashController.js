@@ -2,7 +2,7 @@ const { db, runTransaction } = require('../../database/db');
 const { logAudit } = require('../../middlewares/audit');
 
 const cashController = {
-  getRegisters: (req, res) => {
+  getRegisters: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { branch_id } = req.query;
@@ -14,7 +14,7 @@ const cashController = {
         params.push(branch_id);
       }
 
-      const registers = db.prepare(`
+      const registers = await db.prepare(`
         SELECT cr.*, b.name as branch_name,
                (SELECT cs.id FROM cash_sessions cs WHERE cs.cash_register_id = cr.id AND cs.status = 'open') as active_session_id,
                (SELECT u.username FROM cash_sessions cs JOIN users u ON cs.user_id = u.id WHERE cs.cash_register_id = cr.id AND cs.status = 'open') as active_cashier
@@ -30,12 +30,12 @@ const cashController = {
     }
   },
 
-  getActiveSession: (req, res) => {
+  getActiveSession: async (req, res) => {
     try {
       const branchId = req.user.branch_id;
       const userId = req.user.id;
 
-      const session = db.prepare(`
+      const session = await db.prepare(`
         SELECT cs.*, cr.name as register_name, cr.code as register_code,
                u.username as cashier_name
         FROM cash_sessions cs
@@ -49,7 +49,7 @@ const cashController = {
       }
 
       // Calculate current expected cash in real-time
-      const movements = db.prepare(`
+      const movements = await db.prepare(`
         SELECT type, SUM(amount) as total
         FROM cash_movements
         WHERE cash_session_id = ?
@@ -66,7 +66,7 @@ const cashController = {
       });
 
       session.current_cash = netCash;
-      session.movements = db.prepare('SELECT * FROM cash_movements WHERE cash_session_id = ? ORDER BY created_at DESC').all(session.id);
+      session.movements = await db.prepare('SELECT * FROM cash_movements WHERE cash_session_id = ? ORDER BY created_at DESC').all(session.id);
 
       return res.json({ success: true, has_open_session: true, session });
     } catch (err) {
@@ -74,7 +74,7 @@ const cashController = {
     }
   },
 
-  openSession: (req, res) => {
+  openSession: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { cash_register_id, initial_cash = 0 } = req.body;
@@ -83,12 +83,12 @@ const cashController = {
         return res.status(400).json({ success: false, message: 'La caja registradora es obligatoria.' });
       }
 
-      const reg = db.prepare('SELECT branch_id FROM cash_registers WHERE id = ?').get(cash_register_id);
+      const reg = await db.prepare('SELECT branch_id FROM cash_registers WHERE id = ?').get(cash_register_id);
       const branchId = reg?.branch_id || req.user.branch_id || 1;
       const userId = req.user.id;
 
       // Check if this register already has an open session
-      const existingRegisterSession = db.prepare(`
+      const existingRegisterSession = await db.prepare(`
         SELECT id FROM cash_sessions WHERE cash_register_id = ? AND status = 'open'
       `).get(cash_register_id);
 
@@ -97,7 +97,7 @@ const cashController = {
       }
 
       // Check if user already has an open session
-      const existingUserSession = db.prepare(`
+      const existingUserSession = await db.prepare(`
         SELECT id FROM cash_sessions WHERE user_id = ? AND status = 'open'
       `).get(userId);
 
@@ -105,19 +105,19 @@ const cashController = {
         return res.status(400).json({ success: false, message: 'Ya tienes una sesión de caja abierta en este u otro punto.' });
       }
 
-      const sessionId = runTransaction(() => {
-        const stmt = db.prepare(`
+      const sessionId = await runTransaction(async () => {
+        const stmt = await db.prepare(`
           INSERT INTO cash_sessions (
             cash_register_id, branch_id, user_id, initial_cash, status
           ) VALUES (?, ?, ?, ?, 'open')
         `);
 
-        const resSession = stmt.run(cash_register_id, branchId, userId, initial_cash);
+        const resSession = await stmt.run(cash_register_id, branchId, userId, initial_cash);
         const sId = resSession.lastInsertRowid;
 
         // Record initial deposit movement if initial cash > 0
         if (Number(initial_cash) > 0) {
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason)
             VALUES (?, ?, 'deposit', ?, 'Monto inicial de apertura de caja')
           `).run(sId, userId, initial_cash);
@@ -143,7 +143,7 @@ const cashController = {
     }
   },
 
-  recordCashMovement: (req, res) => {
+  recordCashMovement: async (req, res) => {
     try {
       const userId = req.user.id;
       const { session_id, type, amount, reason } = req.body;
@@ -152,12 +152,12 @@ const cashController = {
         return res.status(400).json({ success: false, message: 'Sesión, tipo, monto y motivo son obligatorios.' });
       }
 
-      const session = db.prepare('SELECT * FROM cash_sessions WHERE id = ? AND status = "open"').get(session_id);
+      const session = await db.prepare('SELECT * FROM cash_sessions WHERE id = ? AND status = "open"').get(session_id);
       if (!session) {
         return res.status(404).json({ success: false, message: 'Sesión de caja no encontrada o cerrada.' });
       }
 
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason)
         VALUES (?, ?, ?, ?, ?)
       `).run(session_id, userId, type, Math.abs(Number(amount)), reason);
@@ -179,19 +179,19 @@ const cashController = {
     }
   },
 
-  closeSession: (req, res) => {
+  closeSession: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const userId = req.user.id;
       const { session_id, counted_cash, total_card = 0, total_transfer = 0, total_check = 0, total_credit = 0, close_notes = '' } = req.body;
 
-      const session = db.prepare('SELECT * FROM cash_sessions WHERE id = ? AND status = "open"').get(session_id);
+      const session = await db.prepare('SELECT * FROM cash_sessions WHERE id = ? AND status = "open"').get(session_id);
       if (!session) {
         return res.status(404).json({ success: false, message: 'Sesión no encontrada o ya se encuentra cerrada.' });
       }
 
       // Calculate expected cash from movements
-      const movements = db.prepare(`
+      const movements = await db.prepare(`
         SELECT type, SUM(amount) as total
         FROM cash_movements
         WHERE cash_session_id = ?
@@ -217,8 +217,8 @@ const cashController = {
         });
       }
 
-      runTransaction(() => {
-        db.prepare(`
+      await runTransaction(async () => {
+        await db.prepare(`
           UPDATE cash_sessions
           SET status = 'closed',
               closed_at = CURRENT_TIMESTAMP,
@@ -264,7 +264,7 @@ const cashController = {
     }
   },
 
-  getSessionHistory: (req, res) => {
+  getSessionHistory: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { branch_id, date } = req.query;
@@ -280,7 +280,7 @@ const cashController = {
         params.push(date);
       }
 
-      const sessions = db.prepare(`
+      const sessions = await db.prepare(`
         SELECT cs.*, cr.name as register_name,
                u.username as cashier_username, u.first_name || ' ' || u.last_name as cashier_name
         FROM cash_sessions cs
