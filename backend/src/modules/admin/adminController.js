@@ -74,7 +74,8 @@ const adminController = {
         ORDER BY is_read ASC, created_at DESC
         LIMIT 25
       `).all(companyId);
-      const unreadCount = await db.prepare(`SELECT COUNT(*) as count FROM notifications WHERE company_id = ? AND is_read = 0`).get(companyId).count;
+      const unreadRow = await db.prepare(`SELECT COUNT(*) as count FROM notifications WHERE company_id = ? AND is_read = 0`).get(companyId);
+      const unreadCount = unreadRow ? parseInt(unreadRow.count, 10) || 0 : 0;
       return res.json({ success: true, data: notifs, unread_count: unreadCount });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -409,7 +410,8 @@ const adminController = {
 
       const whereSQL = where.join(' AND ');
 
-      const count = await db.prepare(`SELECT COUNT(*) as total FROM audit_logs al WHERE ${whereSQL}`).get(...params).total;
+      const countRow = await db.prepare(`SELECT COUNT(*) as total FROM audit_logs al WHERE ${whereSQL}`).get(...params);
+      const count = countRow ? parseInt(countRow.total, 10) || 0 : 0;
 
       const logs = await db.prepare(`
         SELECT al.*, u.username, u.first_name || ' ' || u.last_name as user_name

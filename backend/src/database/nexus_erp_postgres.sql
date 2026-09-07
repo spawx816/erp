@@ -8,8 +8,60 @@
 -- 1. EXTENSIONS
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 2. ENUMS & DOMAINS (Optional / Standard Types)
--- Tables use standard PostgreSQL TIMESTAMP WITH TIME ZONE and NUMERIC
+-- COMPATIBILITY FUNCTIONS (Emulate SQLite date and formatting functions in PostgreSQL)
+CREATE OR REPLACE FUNCTION strftime(fmt text, ts timestamptz) RETURNS text AS $$
+BEGIN
+  fmt := replace(fmt, '%Y', 'YYYY');
+  fmt := replace(fmt, '%m', 'MM');
+  fmt := replace(fmt, '%d', 'DD');
+  fmt := replace(fmt, '%H', 'HH24');
+  fmt := replace(fmt, '%M', 'MI');
+  fmt := replace(fmt, '%S', 'SS');
+  RETURN to_char(ts, fmt);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION strftime(fmt text, ts text) RETURNS text AS $$
+BEGIN
+  IF ts = 'now' THEN
+    RETURN strftime(fmt, NOW());
+  ELSE
+    RETURN strftime(fmt, ts::timestamptz);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION strftime(fmt text, ts date) RETURNS text AS $$
+BEGIN
+  RETURN strftime(fmt, ts::timestamptz);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION date(ts text) RETURNS date AS $$
+BEGIN
+  IF ts = 'now' THEN
+    RETURN CURRENT_DATE;
+  ELSE
+    RETURN ts::date;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION date(ts timestamptz) RETURNS date AS $$
+BEGIN
+  RETURN ts::date;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION ifnull(a anyelement, b anyelement) RETURNS anyelement AS $$
+BEGIN
+  RETURN COALESCE(a, b);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
 -- 3. COMPANIES & STRUCTURE
 CREATE TABLE IF NOT EXISTS companies (
@@ -742,6 +794,224 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     ip_address VARCHAR(50),
     user_agent TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS customer_groups (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    discount_rate DECIMAL(5,2) DEFAULT 0.00,
+    credit_limit DECIMAL(14,2) DEFAULT 0.00,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS affiliates (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name VARCHAR(150) NOT NULL,
+    code VARCHAR(50) NOT NULL,
+    commission_rate DECIMAL(5,2) DEFAULT 5.00,
+    phone VARCHAR(50),
+    email VARCHAR(150),
+    status VARCHAR(30) DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS inventories (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    warehouse_id INT NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+    product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    variant_id INT REFERENCES product_variants(id) ON DELETE CASCADE,
+    quantity DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    min_quantity DECIMAL(14,2) DEFAULT 0.00,
+    max_quantity DECIMAL(14,2) DEFAULT 0.00,
+    location_in_warehouse TEXT,
+    last_count_date TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(warehouse_id, product_id, variant_id)
+);
+
+CREATE TABLE IF NOT EXISTS inventory_movements (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    warehouse_id INT REFERENCES warehouses(id),
+    product_id INT REFERENCES products(id),
+    variant_id INT REFERENCES product_variants(id),
+    movement_type VARCHAR(50) NOT NULL,
+    quantity DECIMAL(14,2) NOT NULL,
+    unit_cost DECIMAL(14,2) NOT NULL,
+    total_cost DECIMAL(14,2) NOT NULL,
+    balance_quantity DECIMAL(14,2) NOT NULL,
+    reference_type VARCHAR(50),
+    reference_id INT,
+    to_warehouse_id INT REFERENCES warehouses(id),
+    notes TEXT,
+    user_id INT REFERENCES users(id),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS stock_counts (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    warehouse_id INT NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+    counted_by_user_id INT NOT NULL REFERENCES users(id),
+    status VARCHAR(30) DEFAULT 'draft',
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    applied_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS stock_count_items (
+    id SERIAL PRIMARY KEY,
+    stock_count_id INT NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
+    product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    system_quantity DECIMAL(14,2) NOT NULL,
+    physical_quantity DECIMAL(14,2) NOT NULL,
+    difference DECIMAL(14,2) NOT NULL,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS purchase_orders (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    supplier_id INT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    warehouse_id INT NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+    order_number VARCHAR(50) NOT NULL,
+    status VARCHAR(30) DEFAULT 'draft',
+    expected_date DATE,
+    subtotal DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    tax_amount DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    total DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    notes TEXT,
+    created_by_user_id INT REFERENCES users(id),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+    id SERIAL PRIMARY KEY,
+    purchase_order_id INT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    quantity DECIMAL(14,2) NOT NULL,
+    unit_cost DECIMAL(14,2) NOT NULL,
+    subtotal DECIMAL(14,2) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS quotes (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    branch_id INT NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    customer_id INT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    quote_number VARCHAR(50) NOT NULL,
+    subtotal DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    discount_amount DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    tax_amount DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    total DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+    valid_until DATE,
+    status VARCHAR(30) DEFAULT 'pending',
+    notes TEXT,
+    created_by_user_id INT REFERENCES users(id),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS quote_items (
+    id SERIAL PRIMARY KEY,
+    quote_id INT NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+    product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    quantity DECIMAL(14,2) NOT NULL,
+    unit_price DECIMAL(14,2) NOT NULL,
+    subtotal DECIMAL(14,2) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS discount_authorizations (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id INT REFERENCES customers(id),
+    requested_by_user_id INT NOT NULL REFERENCES users(id),
+    authorized_by_user_id INT REFERENCES users(id),
+    requested_discount_percent DECIMAL(5,2) NOT NULL,
+    current_discount_percent DECIMAL(5,2) DEFAULT 0,
+    status VARCHAR(30) DEFAULT 'pending',
+    reason TEXT,
+    response_notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    responded_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS collection_notes (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id INT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    user_id INT REFERENCES users(id),
+    contact_type VARCHAR(50) DEFAULT 'call',
+    note TEXT NOT NULL,
+    promise_date DATE,
+    promise_amount DECIMAL(14,2),
+    promise_fulfilled INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS commissions (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    salesperson_id INT NOT NULL REFERENCES salespeople(id) ON DELETE CASCADE,
+    sale_id INT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+    sale_amount DECIMAL(14,2) NOT NULL,
+    commission_percentage DECIMAL(5,2) NOT NULL,
+    commission_amount DECIMAL(14,2) NOT NULL,
+    status VARCHAR(30) DEFAULT 'pending',
+    paid_at TIMESTAMPTZ,
+    receipt_number VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    user_id INT REFERENCES users(id) ON DELETE SET NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    priority VARCHAR(30) DEFAULT 'normal',
+    is_read INT DEFAULT 0,
+    link TEXT,
+    reference_type VARCHAR(50),
+    reference_id INT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS backups (
+    id SERIAL PRIMARY KEY,
+    company_id INT REFERENCES companies(id),
+    filename VARCHAR(255) NOT NULL,
+    file_path TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    backup_type VARCHAR(50) DEFAULT 'manual',
+    status VARCHAR(50) DEFAULT 'completed',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS import_logs (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id),
+    user_id INT NOT NULL REFERENCES users(id),
+    entity_type VARCHAR(50) NOT NULL,
+    total_rows INT NOT NULL,
+    success_rows INT NOT NULL,
+    error_rows INT NOT NULL,
+    error_details TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    key VARCHAR(100) NOT NULL,
+    value TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, key)
 );
 
 -- 19. INDEXES FOR HIGH-SPEED LOOKUPS

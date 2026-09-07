@@ -19,30 +19,22 @@ const tableOrder = [
   'companies', 'branches', 'warehouses', 'roles', 'permissions', 'role_permissions',
   'users', 'user_branches', 'salespeople', 'categories', 'brands', 'units',
   'products', 'product_variants', 'price_lists', 'price_list_items',
-  'customers', 'suppliers', 'ncf_sequences', 'ncf_logs',
+  'customer_groups', 'affiliates', 'customers', 'suppliers',
+  'ncf_sequences', 'ncf_logs', 'fiscal_document_types', 'fiscal_sequences', 'fiscal_sequence_logs',
   'cash_registers', 'cash_sessions', 'cash_movements',
-  'sales', 'sale_items', 'sale_payments', 'accounts_receivable', 'receivable_payments', 'payment_allocations',
-  'credit_notes', 'credit_note_items', 'purchases', 'purchase_items', 'accounts_payable', 'payable_payments',
-  'expense_categories', 'expenses', 'recurring_expenses',
-  'inventory', 'inventories', 'inventory_batches', 'inventory_transactions', 'inventory_movements',
+  'quotes', 'quote_items',
+  'sales', 'sale_items', 'sale_payments', 'discount_authorizations',
+  'accounts_receivable', 'receivable_payments', 'payment_allocations', 'collection_notes',
+  'credit_notes', 'credit_note_items',
+  'purchases', 'purchase_items', 'purchase_orders', 'purchase_order_items',
+  'accounts_payable', 'payable_payments',
+  'expense_categories', 'expenses', 'recurring_expenses', 'commissions',
+  'inventory', 'inventories', 'inventory_batches', 'inventory_lots', 'inventory_transactions', 'inventory_movements',
   'inventory_transfers', 'inventory_transfer_items', 'inventory_adjustments', 'inventory_adjustment_items',
-  'import_orders', 'import_costs', 'import_items', 'monthly_closings', 'system_settings', 'settings', 'audit_logs', 'notifications'
+  'stock_counts', 'stock_count_items',
+  'import_orders', 'import_costs', 'import_items', 'monthly_closings',
+  'system_settings', 'settings', 'audit_logs', 'notifications', 'backups', 'import_logs'
 ];
-
-// Add notifications table schema if missing
-sqlDump += `
-CREATE TABLE IF NOT EXISTS notifications (
-    id SERIAL PRIMARY KEY,
-    company_id INT REFERENCES companies(id) ON DELETE CASCADE,
-    user_id INT REFERENCES users(id) ON DELETE CASCADE,
-    title VARCHAR(255) NOT NULL,
-    message TEXT NOT NULL,
-    type VARCHAR(50) DEFAULT 'info',
-    read BOOLEAN DEFAULT FALSE,
-    link TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-`;
 
 const existingTableNames = tables.map(t => t.name);
 

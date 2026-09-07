@@ -16,15 +16,36 @@ pool.on('error', (err) => {
   console.error('Unexpected error on idle PostgreSQL client', err);
 });
 
-// Helper to convert SQLite '?' placeholders to PostgreSQL '$1, $2, ...'
+// Helper to convert SQLite '?' placeholders and dialect to PostgreSQL
 function convertSqliteToPostgres(sql) {
   let paramIndex = 1;
   let converted = sql.replace(/\?/g, () => `$${paramIndex++}`);
 
   // Replace SQLite specific date arithmetic if present
-  // e.g. CAST((julianday('now') - julianday(ar.due_date)) AS INTEGER) -> CAST(EXTRACT(DAY FROM (NOW() - ar.due_date)) AS INTEGER)
   converted = converted.replace(/CAST\s*\(\s*\(\s*julianday\('now'\)\s*-\s*julianday\(([^)]+)\)\s*\)\s*AS\s*INTEGER\s*\)/gi, 
     'CAST(EXTRACT(DAY FROM (NOW() - $1)) AS INTEGER)');
+
+  // IFNULL -> COALESCE
+  converted = converted.replace(/IFNULL\s*\(/gi, 'COALESCE(');
+
+  // date('now') / datetime('now')
+  converted = converted.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
+  converted = converted.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'CURRENT_TIMESTAMP');
+
+  // strftime translations
+  converted = converted.replace(/strftime\s*\(\s*'%Y-%m'\s*,\s*'now'\s*\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY-MM')");
+  converted = converted.replace(/strftime\s*\(\s*'%Y'\s*,\s*'now'\s*\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY')");
+  converted = converted.replace(/strftime\s*\(\s*'%Y-%m-%d'\s*,\s*'now'\s*\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')");
+  converted = converted.replace(/strftime\s*\(\s*'%d'\s*,\s*'now'\s*\)/gi, "TO_CHAR(CURRENT_DATE, 'DD')");
+
+  converted = converted.replace(/strftime\s*\(\s*'%Y-%m'\s*,\s*([^)]+)\)/gi, "TO_CHAR(($1)::timestamp, 'YYYY-MM')");
+  converted = converted.replace(/strftime\s*\(\s*'%Y'\s*,\s*([^)]+)\)/gi, "TO_CHAR(($1)::timestamp, 'YYYY')");
+  converted = converted.replace(/strftime\s*\(\s*'%d'\s*,\s*([^)]+)\)/gi, "TO_CHAR(($1)::timestamp, 'DD')");
+  converted = converted.replace(/strftime\s*\(\s*'%m'\s*,\s*([^)]+)\)/gi, "TO_CHAR(($1)::timestamp, 'MM')");
+  converted = converted.replace(/strftime\s*\(\s*'%Y-%m-%d'\s*,\s*([^)]+)\)/gi, "TO_CHAR(($1)::timestamp, 'YYYY-MM-DD')");
+
+  // date(col) -> ((col)::date)
+  converted = converted.replace(/date\s*\(\s*([^)]+)\)/gi, "($1)::date");
 
   return converted;
 }

@@ -89,9 +89,8 @@ const inventoryController = {
         params.push(end_date);
       }
 
-      const whereSQL = whereClauses.join(' AND ');
-
-      const count = await db.prepare(`SELECT COUNT(*) as total FROM inventory_movements m WHERE ${whereSQL}`).get(...params).total;
+      const countRow = await db.prepare(`SELECT COUNT(*) as total FROM inventory_movements m WHERE ${whereSQL}`).get(...params);
+      const count = countRow ? parseInt(countRow.total, 10) || 0 : 0;
 
       const movements = await db.prepare(`
         SELECT m.*,

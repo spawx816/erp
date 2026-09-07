@@ -45,12 +45,13 @@ const salesController = {
 
       const whereSQL = whereClauses.join(' AND ');
 
-      const count = await db.prepare(`
+      const countRow = await db.prepare(`
         SELECT COUNT(*) as total
         FROM sales s
         JOIN customers c ON s.customer_id = c.id
         WHERE ${whereSQL}
-      `).get(...params).total;
+      `).get(...params);
+      const count = countRow ? parseInt(countRow.total, 10) || 0 : 0;
 
       const sales = await db.prepare(`
         SELECT s.*,

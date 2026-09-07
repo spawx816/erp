@@ -99,7 +99,8 @@ const thirdPartiesController = {
 
       let spCode = code;
       if (!spCode) {
-        const count = await db.prepare(`SELECT count(*) as count FROM salespeople WHERE company_id = ?`).get(companyId).count;
+        const countRow = await db.prepare(`SELECT count(*) as count FROM salespeople WHERE company_id = ?`).get(companyId);
+        const count = countRow ? parseInt(countRow.count, 10) || 0 : 0;
         spCode = `VEND-${String(count + 1).padStart(3, '0')}`;
       }
 
@@ -178,7 +179,8 @@ const thirdPartiesController = {
 
       const whereSQL = whereClauses.join(' AND ');
 
-      const count = await db.prepare(`SELECT COUNT(*) as total FROM customers c WHERE ${whereSQL}`).get(...params).total;
+      const countRow = await db.prepare(`SELECT COUNT(*) as total FROM customers c WHERE ${whereSQL}`).get(...params);
+      const count = countRow ? parseInt(countRow.total, 10) || 0 : 0;
 
       const customers = await db.prepare(`
         SELECT c.*,
@@ -293,9 +295,12 @@ const thirdPartiesController = {
       `).all(id);
 
       // Statistics calculations
-      const totalPurchased = await db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE customer_id = ? AND status != 'cancelled'`).get(id).total;
-      const purchasesThisYear = await db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE customer_id = ? AND status != 'cancelled' AND strftime('%Y', created_at) = strftime('%Y', 'now')`).get(id).total;
-      const purchasesThisMonth = await db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE customer_id = ? AND status != 'cancelled' AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`).get(id).total;
+      const totalPurchasedRow = await db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE customer_id = ? AND status != 'cancelled'`).get(id);
+      const totalPurchased = totalPurchasedRow ? Number(totalPurchasedRow.total) || 0 : 0;
+      const purchasesThisYearRow = await db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE customer_id = ? AND status != 'cancelled' AND strftime('%Y', created_at) = strftime('%Y', 'now')`).get(id);
+      const purchasesThisYear = purchasesThisYearRow ? Number(purchasesThisYearRow.total) || 0 : 0;
+      const purchasesThisMonthRow = await db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE customer_id = ? AND status != 'cancelled' AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`).get(id);
+      const purchasesThisMonth = purchasesThisMonthRow ? Number(purchasesThisMonthRow.total) || 0 : 0;
       const overdueCount = await db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(balance), 0) as balance FROM accounts_receivable WHERE customer_id = ? AND status = 'overdue'`).get(id);
       const lastPayment = payments[0] || null;
       const lastSale = invoices[0] || null;
@@ -421,7 +426,8 @@ const thirdPartiesController = {
 
       let custCode = code;
       if (!custCode) {
-        const count = await db.prepare(`SELECT count(*) as count FROM customers WHERE company_id = ?`).get(companyId).count;
+        const countRow = await db.prepare(`SELECT count(*) as count FROM customers WHERE company_id = ?`).get(companyId);
+        const count = countRow ? parseInt(countRow.count, 10) || 0 : 0;
         custCode = `CLI-${String(count + 1).padStart(3, '0')}`;
       }
 
@@ -667,7 +673,8 @@ const thirdPartiesController = {
         return res.status(400).json({ success: false, message: 'Nombre y RNC del proveedor son obligatorios.' });
       }
 
-      const count = await db.prepare(`SELECT count(*) as count FROM suppliers WHERE company_id = ?`).get(companyId).count;
+      const countRow = await db.prepare(`SELECT count(*) as count FROM suppliers WHERE company_id = ?`).get(companyId);
+      const count = countRow ? parseInt(countRow.count, 10) || 0 : 0;
       const code = `PROV-${String(count + 1).padStart(3, '0')}`;
 
       const stmt = await db.prepare(`
