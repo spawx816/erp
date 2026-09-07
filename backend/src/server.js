@@ -1,12 +1,19 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { initSchema } = require('./database/schema');
-const { runSeed } = require('./database/seeder');
+const dbType = process.env.DB_TYPE || 'postgres';
 
-// Initialize database schema and initial seeders
-initSchema();
-runSeed();
+// Initialize database schema and initial seeders only if SQLite
+if (dbType === 'sqlite') {
+  try {
+    const { initSchema } = require('./database/schema');
+    const { runSeed } = require('./database/seeder');
+    initSchema();
+    runSeed();
+  } catch (err) {
+    console.warn('Skipping SQLite schema init:', err.message);
+  }
+}
 
 const app = express();
 
