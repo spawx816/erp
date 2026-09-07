@@ -776,21 +776,22 @@ ON CONFLICT (id) DO NOTHING;
 -- Roles
 INSERT INTO roles (id, company_id, name, slug, description, is_system)
 VALUES 
-(1, 1, 'Super Administrador', 'superadmin', 'Acceso total sin restricciones', TRUE),
-(2, 1, 'Administrador de Sucursal', 'admin_sucursal', 'Control operativo de sucursal', TRUE),
-(3, 1, 'Cajero / Facturación', 'cashier', 'Cobros, facturación POS y cuadre de caja', TRUE),
-(4, 1, 'Encargado de Inventario', 'warehouse_lead', 'Movimientos, compras y transferencias', TRUE),
-(5, 1, 'Vendedor / Preventa', 'salesperson', 'Pedidos, cotizaciones y catálogo', TRUE)
+(1, 1, 'Super Administrador', 'admin', 'Acceso total sin restricciones', TRUE),
+(2, 1, 'Gerente General', 'gerente', 'Gestión operativa y reportes', TRUE),
+(3, 1, 'Cajero Principal', 'cajero', 'Cobros, facturación POS y cuadre de caja', TRUE),
+(4, 1, 'Vendedor Comercial', 'vendedor', 'Pedidos, cotizaciones y catálogo', TRUE),
+(5, 1, 'Encargado de Almacén', 'almacen', 'Movimientos, compras y transferencias', TRUE)
 ON CONFLICT (id) DO NOTHING;
 
--- Admin User (Password: admin123 | bcrypt hash)
+-- Demo Users (Password: admin123)
 INSERT INTO users (id, company_id, branch_id, role_id, username, first_name, last_name, email, password_hash, status)
-VALUES (
-    1, 1, 1, 1, 'admin', 'Administrador', 'Nexus', 'admin@nexus.do',
-    '$2a$10$i2y3bB5l6f1HskL9sJd3eeNf2pYjP/dC1fS8X2wY2jS0h7K9dE4mG', -- admin123
-    'active'
-)
-ON CONFLICT (id) DO NOTHING;
+VALUES 
+(1, 1, 1, 1, 'admin', 'Administrador', 'Nexus', 'admin@nexus.do', '$2b$10$kj.GS/gTXQvCP0LjtT8LKOyLLg37v3.E8.VPXgCEsNSCv0.gEK7DC', 'active'),
+(2, 1, 1, 2, 'gerente', 'Laura', 'Gómez', 'gerente@nexus.do', '$2b$10$kj.GS/gTXQvCP0LjtT8LKOyLLg37v3.E8.VPXgCEsNSCv0.gEK7DC', 'active'),
+(3, 1, 1, 3, 'cajero', 'Marcos', 'Díaz', 'cajero@nexus.do', '$2b$10$kj.GS/gTXQvCP0LjtT8LKOyLLg37v3.E8.VPXgCEsNSCv0.gEK7DC', 'active'),
+(4, 1, 1, 4, 'vendedor', 'Carlos', 'Mendoza', 'vendedor@nexus.do', '$2b$10$kj.GS/gTXQvCP0LjtT8LKOyLLg37v3.E8.VPXgCEsNSCv0.gEK7DC', 'active'),
+(5, 1, 1, 5, 'almacen', 'Roberto', 'Peña', 'almacen@nexus.do', '$2b$10$kj.GS/gTXQvCP0LjtT8LKOyLLg37v3.E8.VPXgCEsNSCv0.gEK7DC', 'active')
+ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash, status = 'active';
 
 -- NCF Sequences
 INSERT INTO ncf_sequences (company_id, branch_id, ncf_type, series, current_sequence, start_sequence, end_sequence, authorization_number, expiration_date)
@@ -803,9 +804,9 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- Ajustar las secuencias de auto-incremento para que coincidan con los IDs insertados
-SELECT setval('companies_id_seq', (SELECT MAX(id) FROM companies));
-SELECT setval('branches_id_seq', (SELECT MAX(id) FROM branches));
-SELECT setval('warehouses_id_seq', (SELECT MAX(id) FROM warehouses));
-SELECT setval('roles_id_seq', (SELECT MAX(id) FROM roles));
-SELECT setval('users_id_seq', (SELECT MAX(id) FROM users));
-SELECT setval('ncf_sequences_id_seq', (SELECT MAX(id) FROM ncf_sequences));
+SELECT setval('companies_id_seq', COALESCE((SELECT MAX(id) FROM companies), 1));
+SELECT setval('branches_id_seq', COALESCE((SELECT MAX(id) FROM branches), 1));
+SELECT setval('warehouses_id_seq', COALESCE((SELECT MAX(id) FROM warehouses), 1));
+SELECT setval('roles_id_seq', COALESCE((SELECT MAX(id) FROM roles), 1));
+SELECT setval('users_id_seq', COALESCE((SELECT MAX(id) FROM users), 1));
+SELECT setval('ncf_sequences_id_seq', COALESCE((SELECT MAX(id) FROM ncf_sequences), 1));
