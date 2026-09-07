@@ -104,7 +104,7 @@ const reportsController = {
       const activeCustomersCount = activeCustomersCountRow ? parseInt(activeCustomersCountRow.count, 10) || 0 : 0;
 
       // 12. Products low on stock or out of stock
-      const stockCounts = await db.prepare(`
+      const stockCounts = (await db.prepare(`
         SELECT
           COUNT(CASE WHEN inv_sum <= 0 THEN 1 END) as out_of_stock,
           COUNT(CASE WHEN inv_sum > 0 AND inv_sum <= stock_min THEN 1 END) as low_stock
@@ -114,50 +114,50 @@ const reportsController = {
           LEFT JOIN inventories inv ON inv.product_id = p.id
           WHERE p.company_id = ?
           GROUP BY p.id
-        )
-      `).get(companyId);
+        ) sub_inv
+      `).get(companyId)) || { out_of_stock: 0, low_stock: 0 };
 
       // 9 INTERACTIVE CHARTS
       // 1. Sales by Day of Month
-      const salesByDay = await db.prepare(`
+      const salesByDay = (await db.prepare(`
         SELECT strftime('%d', created_at) as day, COALESCE(SUM(total), 0) as total
         FROM sales
         WHERE company_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') AND status != 'cancelled'
         GROUP BY strftime('%d', created_at)
         ORDER BY day ASC
-      `).all(companyId);
+      `).all(companyId)) || [];
 
       // 2. Sales vs Collections (Month to Date)
       const salesVsCollections = [
-        { label: 'Ventas Totales', value: salesMonth.total, color: '#3b82f6' },
-        { label: 'Cobros Efectivos', value: collectedMonth, color: '#10b981' },
-        { label: 'Pendiente Facturado', value: Math.max(0, salesMonth.total - collectedMonth), color: '#f59e0b' }
+        { label: 'Ventas Totales', value: Number(salesMonth.total) || 0, color: '#3b82f6' },
+        { label: 'Cobros Efectivos', value: Number(collectedMonth) || 0, color: '#10b981' },
+        { label: 'Pendiente Facturado', value: Math.max(0, (Number(salesMonth.total) || 0) - (Number(collectedMonth) || 0)), color: '#f59e0b' }
       ];
 
       // 3. Sales by Salesperson
-      const salesBySalesperson = await db.prepare(`
+      const salesBySalesperson = (await db.prepare(`
         SELECT sp.name as salesperson_name, sp.code, COALESCE(SUM(s.total), 0) as total, COUNT(s.id) as invoice_count
         FROM salespeople sp
         LEFT JOIN sales s ON s.salesperson_id = sp.id AND s.status != 'cancelled' AND strftime('%Y-%m', s.created_at) = strftime('%Y-%m', 'now')
         WHERE sp.company_id = ?
-        GROUP BY sp.id
+        GROUP BY sp.id, sp.name, sp.code
         ORDER BY total DESC
-      `).all(companyId);
+      `).all(companyId)) || [];
 
       // 4. Sales by Category
-      const salesByCategory = await db.prepare(`
+      const salesByCategory = (await db.prepare(`
         SELECT c.name as category_name, COALESCE(SUM(si.total), 0) as total
         FROM categories c
         JOIN products p ON p.category_id = c.id
         JOIN sale_items si ON si.product_id = p.id
         JOIN sales s ON si.sale_id = s.id
         WHERE s.company_id = ? AND s.status != 'cancelled' AND strftime('%Y-%m', s.created_at) = strftime('%Y-%m', 'now')
-        GROUP BY c.id
+        GROUP BY c.id, c.name
         ORDER BY total DESC
-      `).all(companyId);
+      `).all(companyId)) || [];
 
       // 5. CxC Aging Breakdown (0-30, 31-60, 61-90, 91-120, +120)
-      const agingData = await db.prepare(`
+      const agingData = (await db.prepare(`
         SELECT
           COALESCE(SUM(CASE WHEN days_overdue <= 30 THEN balance ELSE 0 END), 0) as bracket_0_30,
           COALESCE(SUM(CASE WHEN days_overdue > 30 AND days_overdue <= 60 THEN balance ELSE 0 END), 0) as bracket_31_60,
@@ -165,24 +165,24 @@ const reportsController = {
           COALESCE(SUM(CASE WHEN days_overdue > 90 AND days_overdue <= 120 THEN balance ELSE 0 END), 0) as bracket_91_120,
           COALESCE(SUM(CASE WHEN days_overdue > 120 THEN balance ELSE 0 END), 0) as bracket_120_plus
         FROM (
-          SELECT balance, CAST((julianday('now') - julianday(due_date)) AS INTEGER) as days_overdue
+          SELECT balance, CAST(CURRENT_DATE - (due_date)::date AS INTEGER) as days_overdue
           FROM accounts_receivable
           WHERE company_id = ? AND status != 'paid' AND balance > 0
-        )
-      `).get(companyId);
+        ) sub_ar
+      `).get(companyId)) || { bracket_0_30: 0, bracket_31_60: 0, bracket_61_90: 0, bracket_91_120: 0, bracket_120_plus: 0 };
 
       // 6. Expenses by Category
-      const expensesByCategory = await db.prepare(`
+      const expensesByCategory = (await db.prepare(`
         SELECT ec.name, COALESCE(SUM(e.amount), 0) as total
         FROM expense_categories ec
         JOIN expenses e ON e.category_id = ec.id
         WHERE e.company_id = ? AND strftime('%Y-%m', e.expense_date) = strftime('%Y-%m', 'now')
-        GROUP BY ec.id
+        GROUP BY ec.id, ec.name
         ORDER BY total DESC
-      `).all(companyId);
+      `).all(companyId)) || [];
 
       // 7. Top Selling Products
-      const topProducts = await db.prepare(`
+      const topProducts = (await db.prepare(`
         SELECT si.product_name, SUM(si.quantity) as units_sold, SUM(si.total) as total_revenue
         FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
@@ -190,29 +190,29 @@ const reportsController = {
         GROUP BY si.product_id, si.product_name
         ORDER BY total_revenue DESC
         LIMIT 6
-      `).all(companyId);
+      `).all(companyId)) || [];
 
       // 8. Top Customers by Purchase Volume
-      const topCustomers = await db.prepare(`
+      const topCustomers = (await db.prepare(`
         SELECT COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                c.code, COALESCE(SUM(s.total), 0) as total_purchased, COUNT(s.id) as purchases_count
         FROM customers c
         JOIN sales s ON s.customer_id = c.id
         WHERE s.company_id = ? AND s.status != 'cancelled' AND strftime('%Y-%m', s.created_at) = strftime('%Y-%m', 'now')
-        GROUP BY c.id
+        GROUP BY c.id, c.company_name, c.first_name, c.last_name, c.code
         ORDER BY total_purchased DESC
         LIMIT 6
-      `).all(companyId);
+      `).all(companyId)) || [];
 
       // 9. Sales Evolution Last 12 Months
-      const sales12Months = await db.prepare(`
+      const sales12Months = (await db.prepare(`
         SELECT strftime('%Y-%m', created_at) as month, SUM(total) as total, COUNT(id) as count
         FROM sales
         WHERE company_id = ? AND status != 'cancelled'
         GROUP BY strftime('%Y-%m', created_at)
         ORDER BY month DESC
         LIMIT 12
-      `).all(companyId);
+      `).all(companyId)) || [];
 
       // ALERTS PANEL
       const alerts = [
@@ -221,7 +221,7 @@ const reportsController = {
           type: 'overdue_invoices',
           severity: 'critical',
           title: 'Facturas Vencidas en Cartera',
-          description: `${overdueCxC.count} facturas vencidas por un monto de RD$ ${overdueCxC.total.toLocaleString('es-DO', { minimumFractionDigits: 2 })}`,
+          description: `${overdueCxC.count || 0} facturas vencidas por un monto de RD$ ${Number(overdueCxC.total || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}`,
           link: 'cxc'
         },
         {
@@ -237,7 +237,7 @@ const reportsController = {
           type: 'stock_out',
           severity: 'critical',
           title: 'Productos Próximos a Agotarse',
-          description: `${stockCounts.out_of_stock} productos agotados y ${stockCounts.low_stock} por debajo del inventario mínimo`,
+          description: `${stockCounts.out_of_stock || 0} productos agotados y ${stockCounts.low_stock || 0} por debajo del inventario mínimo`,
           link: 'inventory-analysis'
         },
         {
@@ -254,20 +254,20 @@ const reportsController = {
         success: true,
         data: {
           kpis: {
-            sales_today: salesToday.total,
-            sales_today_count: salesToday.count,
-            sales_month: salesMonth.total,
-            sales_month_count: salesMonth.count,
-            collected_today: collectedToday,
-            collected_month: collectedMonth,
-            total_pending_cxc: totalPendingCxC.total,
-            overdue_cxc: overdueCxC.total,
-            inventory_valuation: inventoryValuation,
-            expenses_month: expensesMonth.total,
-            estimated_profit_month: Math.max(0, estimatedProfitMonth),
-            pending_invoices_count: pendingInvoicesCount,
-            active_customers_count: activeCustomersCount,
-            low_stock_count: stockCounts.low_stock + stockCounts.out_of_stock
+            sales_today: Number(salesToday.total) || 0,
+            sales_today_count: Number(salesToday.count) || 0,
+            sales_month: Number(salesMonth.total) || 0,
+            sales_month_count: Number(salesMonth.count) || 0,
+            collected_today: Number(collectedToday) || 0,
+            collected_month: Number(collectedMonth) || 0,
+            total_pending_cxc: Number(totalPendingCxC.total) || 0,
+            overdue_cxc: Number(overdueCxC.total) || 0,
+            inventory_valuation: Number(inventoryValuation) || 0,
+            expenses_month: Number(expensesMonth.total) || 0,
+            estimated_profit_month: Math.max(0, Number(estimatedProfitMonth) || 0),
+            pending_invoices_count: Number(pendingInvoicesCount) || 0,
+            active_customers_count: Number(activeCustomersCount) || 0,
+            low_stock_count: (Number(stockCounts.low_stock) || 0) + (Number(stockCounts.out_of_stock) || 0)
           },
           charts: {
             sales_by_day: salesByDay,
@@ -275,16 +275,16 @@ const reportsController = {
             sales_by_salesperson: salesBySalesperson,
             sales_by_category: salesByCategory,
             cxc_aging: [
-              { label: '0-30 días', value: agingData.bracket_0_30, color: '#10b981' },
-              { label: '31-60 días', value: agingData.bracket_31_60, color: '#f59e0b' },
-              { label: '61-90 días', value: agingData.bracket_61_90, color: '#f97316' },
-              { label: '91-120 días', value: agingData.bracket_91_120, color: '#ef4444' },
-              { label: '+120 días', value: agingData.bracket_120_plus, color: '#991b1b' }
+              { label: '0-30 días', value: Number(agingData.bracket_0_30) || 0, color: '#10b981' },
+              { label: '31-60 días', value: Number(agingData.bracket_31_60) || 0, color: '#f59e0b' },
+              { label: '61-90 días', value: Number(agingData.bracket_61_90) || 0, color: '#f97316' },
+              { label: '91-120 días', value: Number(agingData.bracket_91_120) || 0, color: '#ef4444' },
+              { label: '+120 días', value: Number(agingData.bracket_120_plus) || 0, color: '#991b1b' }
             ],
             expenses_by_category: expensesByCategory,
             top_products: topProducts,
             top_customers: topCustomers,
-            sales_12_months: sales12Months.reverse()
+            sales_12_months: Array.isArray(sales12Months) ? [...sales12Months].reverse() : []
           },
           alerts
         }

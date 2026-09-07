@@ -55,8 +55,13 @@ const db = {
   // Query returning all rows
   query: async (sql, params = []) => {
     const formattedSql = convertSqliteToPostgres(sql);
-    const res = await pool.query(formattedSql, params);
-    return res.rows;
+    try {
+      const res = await pool.query(formattedSql, params);
+      return res.rows;
+    } catch (err) {
+      console.error('❌ Database query error:', err.message, '\nSQL:', formattedSql, '\nParams:', params);
+      throw err;
+    }
   },
 
   // Prepared statement emulation for high compatibility
@@ -65,15 +70,25 @@ const db = {
       all: async (...params) => {
         const flatParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
         const formattedSql = convertSqliteToPostgres(sql);
-        const res = await pool.query(formattedSql, flatParams);
-        return res.rows;
+        try {
+          const res = await pool.query(formattedSql, flatParams);
+          return res.rows;
+        } catch (err) {
+          console.error('❌ Database prepare.all error:', err.message, '\nSQL:', formattedSql, '\nParams:', flatParams);
+          throw err;
+        }
       },
 
       get: async (...params) => {
         const flatParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
         const formattedSql = convertSqliteToPostgres(sql);
-        const res = await pool.query(formattedSql, flatParams);
-        return res.rows[0] || null;
+        try {
+          const res = await pool.query(formattedSql, flatParams);
+          return res.rows[0] || null;
+        } catch (err) {
+          console.error('❌ Database prepare.get error:', err.message, '\nSQL:', formattedSql, '\nParams:', flatParams);
+          throw err;
+        }
       },
 
       run: async (...params) => {
@@ -86,13 +101,18 @@ const db = {
           formattedSql += ' RETURNING id';
         }
 
-        const res = await pool.query(formattedSql, flatParams);
-        const lastInsertRowid = res.rows && res.rows.length > 0 && res.rows[0].id ? res.rows[0].id : null;
+        try {
+          const res = await pool.query(formattedSql, flatParams);
+          const lastInsertRowid = res.rows && res.rows.length > 0 && res.rows[0].id ? res.rows[0].id : null;
 
-        return {
-          lastInsertRowid,
-          changes: res.rowCount
-        };
+          return {
+            lastInsertRowid,
+            changes: res.rowCount
+          };
+        } catch (err) {
+          console.error('❌ Database prepare.run error:', err.message, '\nSQL:', formattedSql, '\nParams:', flatParams);
+          throw err;
+        }
       }
     };
   },
