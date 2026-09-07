@@ -117,6 +117,19 @@ const reportsController = {
         ) sub_inv
       `).get(companyId)) || { out_of_stock: 0, low_stock: 0 };
 
+      // Warehouse metrics
+      const productsCountRow = await db.prepare('SELECT COUNT(*) as count FROM products WHERE company_id = ?').get(companyId);
+      const productsCount = productsCountRow ? parseInt(productsCountRow.count, 10) || 0 : 0;
+
+      const totalUnitsRow = await db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventories inv JOIN products p ON inv.product_id = p.id WHERE p.company_id = ?').get(companyId);
+      const totalPhysicalUnits = totalUnitsRow ? parseInt(totalUnitsRow.total, 10) || 0 : 0;
+
+      const lotsCountRow = await db.prepare('SELECT COUNT(*) as count FROM inventory_lots il JOIN products p ON il.product_id = p.id WHERE p.company_id = ?').get(companyId);
+      const lotsCount = lotsCountRow ? parseInt(lotsCountRow.count, 10) || 0 : 0;
+
+      const pendingPurchasesRow = await db.prepare('SELECT COUNT(*) as count FROM purchases WHERE company_id = ? AND status != \'received\'').get(companyId);
+      const pendingPurchasesCount = pendingPurchasesRow ? parseInt(pendingPurchasesRow.count, 10) || 0 : 0;
+
       // 9 INTERACTIVE CHARTS
       // 1. Sales by Day of Month
       const salesByDay = (await db.prepare(`
@@ -267,7 +280,13 @@ const reportsController = {
             estimated_profit_month: Math.max(0, Number(estimatedProfitMonth) || 0),
             pending_invoices_count: Number(pendingInvoicesCount) || 0,
             active_customers_count: Number(activeCustomersCount) || 0,
-            low_stock_count: (Number(stockCounts.low_stock) || 0) + (Number(stockCounts.out_of_stock) || 0)
+            low_stock_count: (Number(stockCounts.low_stock) || 0) + (Number(stockCounts.out_of_stock) || 0),
+            stock_out: Number(stockCounts.out_of_stock) || 0,
+            stock_low: Number(stockCounts.low_stock) || 0,
+            products_count: productsCount,
+            total_physical_units: totalPhysicalUnits,
+            lots_count: lotsCount,
+            pending_purchases_count: pendingPurchasesCount
           },
           charts: {
             sales_by_day: salesByDay,

@@ -42,6 +42,7 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       id: 'ventas',
       label: 'VENTAS',
       icon: Receipt,
+      roles: ['admin', 'gerente', 'cajero', 'vendedor'],
       items: [
         { id: 'pos', label: 'Facturación (POS)', icon: ShoppingCart, highlight: true },
         { id: 'sales', label: 'Facturas', icon: Receipt },
@@ -52,6 +53,7 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       id: 'clientes',
       label: 'CLIENTES',
       icon: Users,
+      roles: ['admin', 'gerente', 'cajero', 'vendedor', 'cobros'],
       items: [
         { id: 'customers', label: 'Clientes', icon: Users },
         { id: 'customer-statement', label: 'Estado de Cuenta', icon: FileText },
@@ -84,12 +86,12 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
     },
     {
       id: 'compras',
-      label: 'COMPRAS',
+      label: user?.role_slug === 'almacen' ? 'RECEPCIONES & COMPRAS' : 'COMPRAS',
       icon: ShoppingBag,
       roles: ['admin', 'gerente', 'almacen'],
       items: [
         { id: 'suppliers', label: 'Proveedores', icon: Truck },
-        { id: 'purchases', label: 'Compras', icon: ShoppingBag },
+        { id: 'purchases', label: user?.role_slug === 'almacen' ? 'Recepción de Mercancía' : 'Compras', icon: ShoppingBag },
         { id: 'cxp-dashboard', label: 'Cuentas por Pagar', icon: CreditCard, roles: ['admin', 'gerente'] }
       ]
     },
@@ -108,6 +110,7 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       id: 'vendedores',
       label: user?.role_slug === 'vendedor' ? 'MIS COMISIONES' : 'VENDEDORES',
       icon: UserCheck,
+      roles: ['admin', 'gerente', 'vendedor'],
       items: [
         { id: 'salespeople', label: 'Fuerza de Ventas', icon: UserCheck, roles: ['admin', 'gerente'] },
         { id: 'commissions', label: user?.role_slug === 'vendedor' ? 'Mis Comisiones' : 'Comisiones', icon: Percent }
