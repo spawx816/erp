@@ -4,7 +4,7 @@ import {
   Clock, ArrowUpRight, ArrowDownRight, Package, Users,
   Building2, CheckCircle2, ChevronRight, RefreshCw,
   Wallet, ShieldAlert, Layers, Target, BarChart3,
-  Calendar, FileText, Activity
+  Calendar, FileText, Activity, Percent
 } from 'lucide-react';
 import api from '../services/api';
 
