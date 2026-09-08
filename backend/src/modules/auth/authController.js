@@ -114,10 +114,19 @@ const authController = {
         description: `Inicio de sesión exitoso del usuario ${user.username}`
       });
 
+      // Check for open cash session for this user in current branch
+      const activeCashSession = await db.prepare(`
+        SELECT cs.*, cr.name as register_name
+        FROM cash_sessions cs
+        JOIN cash_registers cr ON cs.cash_register_id = cr.id
+        WHERE cs.user_id = ? AND cs.status = 'open' AND cs.branch_id = ?
+      `).get(user.id, activeBranchId);
+
       delete user.password_hash;
       user.permissions = permissions;
       user.accessible_branches = branches;
       user.active_branch_id = activeBranchId;
+      user.active_cash_session = activeCashSession || null;
 
       return res.json({
         success: true,

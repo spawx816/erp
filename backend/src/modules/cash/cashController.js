@@ -185,7 +185,17 @@ const cashController = {
     try {
       const companyId = req.user.company_id;
       const userId = req.user.id;
-      const { session_id, counted_cash, total_card = 0, total_transfer = 0, total_check = 0, total_credit = 0, close_notes = '' } = req.body;
+      const {
+        session_id,
+        counted_cash,
+        actual_cash,
+        total_card = 0,
+        total_transfer = 0,
+        total_check = 0,
+        total_credit = 0,
+        close_notes,
+        notes
+      } = req.body;
 
       const session = await db.prepare("SELECT * FROM cash_sessions WHERE id = ? AND status = 'open'").get(session_id);
       if (!session) {
@@ -209,10 +219,11 @@ const cashController = {
         }
       });
 
-      const counted = Number(counted_cash || 0);
+      const counted = Number(counted_cash !== undefined ? counted_cash : (actual_cash !== undefined ? actual_cash : 0));
+      const finalNotes = close_notes || notes || '';
       const cashDifference = counted - expectedCash;
 
-      if (cashDifference !== 0 && (!close_notes || close_notes.trim() === '')) {
+      if (cashDifference !== 0 && (!finalNotes || finalNotes.trim() === '')) {
         return res.status(400).json({
           success: false,
           message: `Existe un descuadre de caja de RD$ ${cashDifference.toFixed(2)}. Es obligatorio justificar la diferencia en las observaciones de cierre.`
@@ -237,7 +248,7 @@ const cashController = {
         `).run(
           expectedCash, counted, cashDifference,
           total_card, total_transfer, total_check, total_credit,
-          session_id, close_notes, session_id
+          session_id, finalNotes, session_id
         );
 
         logAudit({

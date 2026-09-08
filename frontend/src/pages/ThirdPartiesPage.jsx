@@ -4,7 +4,10 @@ import {
   MapPin, DollarSign, Clock, Package, X, CheckCircle,
   LayoutGrid, Table, ShieldAlert, ShieldCheck, AlertCircle,
   FileText, Send, Calendar, Percent, UserCheck, Building2,
-  Printer, Lock, Unlock, ArrowRight, RefreshCw, AlertTriangle
+  Printer, Lock, Unlock, ArrowRight, RefreshCw, AlertTriangle,
+  ShoppingCart, CreditCard, HandCoins, Receipt, Activity,
+  TrendingUp, MessageCircle, ExternalLink, Copy, CheckCircle2,
+  Wallet, Award, PhoneCall, Sparkles, Navigation, Check
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
@@ -18,6 +21,13 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     initialMode === 'customer-statement' ? 'statement' :
     initialMode === 'credit-risk' ? 'credit-risk' : 'customers'
   );
+
+  useEffect(() => {
+    if (initialMode === 'suppliers') setActiveTab('suppliers');
+    else if (initialMode === 'customer-statement') setActiveTab('statement');
+    else if (initialMode === 'credit-risk') setActiveTab('credit-risk');
+    else if (initialMode === 'customers') setActiveTab('customers');
+  }, [initialMode]);
   const [viewMode, setViewMode] = useState('cards'); // 'cards' | 'table'
   const [customers, setCustomers] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
@@ -1091,396 +1101,958 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
         </div>
       )}
 
-      {/* SECTION #40: CUSTOMER 360° MODAL (9 TABS) */}
+      {/* SECTION #40: CUSTOMER 360° MODAL (REDESIGNED EXECUTIVE UI) */}
       {customer360 && (
         <div className="modal-overlay" onClick={() => setCustomer360(null)}>
-          <div className="modal-content modal-content-xl" style={{ padding: '24px', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                <div style={{
-                  width: '48px',
-                  height: '48px',
-                  borderRadius: '12px',
-                  background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 800,
-                  fontSize: '1.2rem',
-                  color: 'var(--text-primary)'
-                }}>
-                  {(customer360.customer.company_name || customer360.customer.first_name).slice(0, 2).toUpperCase()}
-                </div>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                      {customer360.customer.company_name || `${customer360.customer.first_name} ${customer360.customer.last_name}`}
-                    </h3>
-                    <span className="badge badge-success">Ficha 360°</span>
+          <div
+            className="modal-content modal-content-xl"
+            style={{
+              padding: '24px',
+              maxHeight: '92vh',
+              overflowY: 'auto',
+              background: 'var(--bg-card)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* HERO HEADER */}
+            <div style={{
+              background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '16px',
+              padding: '20px',
+              marginBottom: '18px',
+              position: 'relative'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                {/* Left: Customer Info */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  <div style={{
+                    width: '60px',
+                    height: '60px',
+                    borderRadius: '16px',
+                    background: 'linear-gradient(135deg, #2563eb, #06b6d4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 900,
+                    fontSize: '1.4rem',
+                    color: '#fff',
+                    boxShadow: '0 8px 20px rgba(37, 99, 235, 0.35)',
+                    flexShrink: 0
+                  }}>
+                    {(customer360.customer.company_name || customer360.customer.first_name || 'CL').slice(0, 2).toUpperCase()}
                   </div>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    RNC/Cédula: {customer360.customer.tax_id || customer360.customer.id_card} • Vendedor: {customer360.customer.salesperson_name || 'Carlos Mendoza'}
-                  </p>
-                </div>
-              </div>
 
-              <button onClick={() => setCustomer360(null)} className="btn btn-secondary btn-sm">
-                <X size={16} />
-              </button>
-            </div>
-
-            {/* 9 Tabs Bar */}
-            <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '18px' }}>
-              {[
-                { id: 'general', label: '1. Datos Generales' },
-                { id: 'conditions', label: '2. Condiciones Comerciales' },
-                { id: 'sales', label: `3. Facturas (${customer360.invoices?.length || 0})` },
-                { id: 'cxc', label: `4. CxC (${customer360.receivables?.length || 0})` },
-                { id: 'payments', label: `5. Pagos (${customer360.payments?.length || 0})` },
-                { id: 'stats', label: '6. Comportamiento' },
-                { id: 'notes', label: `7. Notas Cobranza (${customer360.collection_notes?.length || 0})` },
-                { id: 'geo', label: '8. Ubicación GPS' },
-                { id: 'statement', label: '9. Estado de Cuenta' }
-              ].map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => setActive360Tab(t.id)}
-                  className={`btn btn-sm ${active360Tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ borderRadius: '8px', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            {/* TAB CONTENT */}
-            {/* 1. Datos Generales */}
-            {active360Tab === 'general' && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Razón Social / Nombre</span>
-                  <p style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {customer360.customer.company_name || `${customer360.customer.first_name} ${customer360.customer.last_name}`}
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>RNC / Cédula</span>
-                  <p style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
-                    {customer360.customer.tax_id || customer360.customer.id_card || 'Consumidor Final'}
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Teléfono</span>
-                  <p style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {customer360.customer.phone || 'No registrado'}
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Correo Electrónico</span>
-                  <p style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {customer360.customer.email || 'No registrado'}
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Dirección Física</span>
-                  <p style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {customer360.customer.address || 'Santo Domingo, República Dominicana'}
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Ciudad</span>
-                  <p style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {customer360.customer.city || 'Santo Domingo'}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* 2. Condiciones Comerciales */}
-            {active360Tab === 'conditions' && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Vendedor Permanente Asignado</span>
-                  <p style={{ fontSize: '1.1rem', fontWeight: 800, color: '#60a5fa', marginTop: '2px' }}>
-                    {customer360.customer.salesperson_name || 'Carlos Mendoza'} ({customer360.customer.salesperson_code || 'VEND-001'})
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Límite de Crédito Autorizado</span>
-                  <p style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    RD$ {Number(customer360.customer.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Días de Crédito (Plazo)</span>
-                  <p style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {customer360.customer.credit_days || 30} días
-                  </p>
-                </div>
-
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Descuento Fijo Comercial</span>
-                  <p style={{ fontSize: '1.1rem', fontWeight: 800, color: '#a78bfa', marginTop: '2px' }}>
-                    {customer360.customer.discount_percent || 0}%
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* 3. Facturas */}
-            {active360Tab === 'sales' && (
-              <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto' }}>
-                <table className="custom-table">
-                  <thead>
-                    <tr>
-                      <th>Factura</th>
-                      <th>NCF</th>
-                      <th>Fecha</th>
-                      <th>Tipo</th>
-                      <th>Total</th>
-                      <th>Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {customer360.invoices?.map(s => (
-                      <tr key={s.id}>
-                        <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{s.sale_number}</td>
-                        <td style={{ fontFamily: 'var(--font-mono)' }}>{s.ncf}</td>
-                        <td>{new Date(s.created_at).toLocaleDateString('es-DO')}</td>
-                        <td>{s.sale_type}</td>
-                        <td style={{ fontWeight: 700, color: '#60a5fa' }}>RD$ {Number(s.total).toFixed(2)}</td>
-                        <td>
-                          <span className={`badge ${s.status === 'cancelled' ? 'badge-danger' : 'badge-success'}`}>{s.status}</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* 4. Cuentas por Cobrar */}
-            {active360Tab === 'cxc' && (
-              <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto' }}>
-                <table className="custom-table">
-                  <thead>
-                    <tr>
-                      <th>Factura / NCF</th>
-                      <th>Emisión</th>
-                      <th>Vencimiento</th>
-                      <th>Monto Total</th>
-                      <th>Balance Pendiente</th>
-                      <th>Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {customer360.receivables?.map(ar => (
-                      <tr key={ar.id}>
-                        <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{ar.invoice_number || ar.ncf}</td>
-                        <td>{ar.issue_date}</td>
-                        <td>{ar.due_date}</td>
-                        <td>RD$ {Number(ar.amount).toFixed(2)}</td>
-                        <td style={{ fontWeight: 800, color: '#38bdf8' }}>RD$ {Number(ar.balance).toFixed(2)}</td>
-                        <td>
-                          <span className={`badge ${ar.status === 'paid' ? 'badge-success' : ar.status === 'overdue' ? 'badge-danger' : 'badge-warning'}`}>{ar.status}</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* 5. Historial de Pagos */}
-            {active360Tab === 'payments' && (
-              <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto' }}>
-                <table className="custom-table">
-                  <thead>
-                    <tr>
-                      <th>Fecha de Pago</th>
-                      <th>Monto Pagado</th>
-                      <th>Método</th>
-                      <th>Comprobante</th>
-                      <th>Notas</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {customer360.payments?.map(p => (
-                      <tr key={p.id}>
-                        <td>{p.payment_date}</td>
-                        <td style={{ fontWeight: 800, color: 'var(--success)' }}>RD$ {Number(p.total_amount).toFixed(2)}</td>
-                        <td style={{ textTransform: 'capitalize' }}>{p.payment_method}</td>
-                        <td style={{ fontFamily: 'var(--font-mono)' }}>{p.receipt_number || '-'}</td>
-                        <td>{p.notes || '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* 6. Comportamiento & Estadísticas */}
-            {active360Tab === 'stats' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
-                  <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total Comprado Histórico</span>
-                    <p style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                      RD$ {Number(customer360.kpis?.total_purchased_history || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                  <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Compras del Año Actual</span>
-                    <p style={{ fontSize: '1.3rem', fontWeight: 800, color: '#38bdf8' }}>
-                      RD$ {Number(customer360.kpis?.purchases_year || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                  <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Saldo Deudor Actual</span>
-                    <p style={{ fontSize: '1.3rem', fontWeight: 800, color: customer360.kpis?.pending_balance > 0 ? '#f59e0b' : 'var(--success)' }}>
-                      RD$ {Number(customer360.kpis?.pending_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Monthly history */}
-                <div className="card" style={{ padding: '16px' }}>
-                  <h5 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>
-                    Historial de Compras por Mes
-                  </h5>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', height: '120px', borderBottom: '1px solid var(--border-color)', paddingBottom: '6px' }}>
-                    {customer360.monthly_behavior?.map((m, idx) => (
-                      <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', gap: '4px' }}>
-                        <div style={{ width: '100%', height: '60%', background: '#3b82f6', borderRadius: '4px 4px 0 0' }} />
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{m.month.slice(5)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 7. Notas y Seguimientos de Cobranza */}
-            {active360Tab === 'notes' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {/* Form to add note */}
-                <form onSubmit={handleAddCollectionNote} style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: 'var(--bg-subtle)', padding: '14px', borderRadius: '10px' }}>
-                  <label className="label-control">Nueva Nota de Cobranza / Promesa de Pago</label>
-                  <textarea
-                    required
-                    rows="2"
-                    className="input-control"
-                    placeholder="Ej: Cliente promete abonar RD$ 25,000 mediante transferencia el próximo viernes..."
-                    value={newNoteText}
-                    onChange={(e) => setNewNoteText(e.target.value)}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Fecha Compromiso:</span>
-                      <input
-                        type="date"
-                        className="input-control"
-                        value={newPromiseDate}
-                        onChange={(e) => setNewPromiseDate(e.target.value)}
-                        style={{ height: '32px', width: '150px', fontSize: '0.78rem' }}
-                      />
-                    </div>
-                    <button type="submit" disabled={addingNote} className="btn btn-primary btn-sm">
-                      <Send size={14} />
-                      <span>{addingNote ? 'Guardando...' : 'Registrar Nota'}</span>
-                    </button>
-                  </div>
-                </form>
-
-                {/* Notes Timeline */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {customer360.collection_notes?.map(cn => (
-                    <div key={cn.id} style={{ padding: '12px', background: 'var(--bg-main)', borderRadius: '8px', borderLeft: '3px solid #3b82f6' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-                        <span>{cn.user_name || 'Agente de Cobros'}</span>
-                        <span>{new Date(cn.created_at).toLocaleString('es-DO')}</span>
-                      </div>
-                      <p style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>{cn.note}</p>
-                      {cn.promised_payment_date && (
-                        <span className="badge badge-warning" style={{ fontSize: '0.68rem', marginTop: '6px' }}>
-                          Promesa de Pago: {cn.promised_payment_date}
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                      <h3 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.02em' }}>
+                        {customer360.customer.company_name || `${customer360.customer.first_name || ''} ${customer360.customer.last_name || ''}`.trim()}
+                      </h3>
+                      <span className="badge" style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(6, 182, 212, 0.2))', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                        <Sparkles size={11} style={{ marginRight: '4px' }} />
+                        Ficha 360°
+                      </span>
+                      {customer360.customer.is_credit_blocked === 1 ? (
+                        <span className="badge badge-danger">
+                          <Lock size={11} style={{ marginRight: '4px' }} />
+                          Crédito Bloqueado
+                        </span>
+                      ) : (
+                        <span className="badge badge-success">
+                          <ShieldCheck size={11} style={{ marginRight: '4px' }} />
+                          Crédito Activo
                         </span>
                       )}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
-            {/* 8. Ubicación Geográfica */}
-            {active360Tab === 'geo' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Coordenadas GPS</span>
-                    <p style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                      Latitud: {customer360.customer.latitude || '18.4861'} • Longitud: {customer360.customer.longitude || '-69.9312'}
-                    </p>
-                  </div>
-                  <span className="badge badge-success">GPS Verificado</span>
-                </div>
-                <div style={{ height: '220px', background: 'var(--bg-main)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border-color)' }}>
-                  <div style={{ textAlign: 'center' }}>
-                    <MapPin size={32} color="#10b981" style={{ margin: '0 auto 6px' }} />
-                    <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {customer360.customer.company_name}
-                    </p>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      {customer360.customer.address || 'Santo Domingo'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginTop: '6px', fontSize: '0.82rem', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <strong style={{ color: 'var(--text-muted)' }}>RNC/Cédula:</strong>
+                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>
+                          {customer360.customer.tax_id || customer360.customer.id_card || 'Consumidor Final'}
+                        </span>
+                        {(customer360.customer.tax_id || customer360.customer.id_card) && (
+                          <button
+                            type="button"
+                            title="Copiar Documento"
+                            onClick={() => {
+                              navigator.clipboard.writeText(customer360.customer.tax_id || customer360.customer.id_card);
+                              addToast('RNC/Cédula copiado al portapapeles', 'info');
+                            }}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center' }}
+                          >
+                            <Copy size={12} />
+                          </button>
+                        )}
+                      </span>
 
-            {/* 9. Estado de Cuenta */}
-            {active360Tab === 'statement' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Resumen de Balance y Cartera</span>
-                  <button onClick={() => window.print()} className="btn btn-secondary btn-sm">
-                    Imprimir Estado
+                      <span>•</span>
+
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <UserCheck size={13} color="#60a5fa" />
+                        <span>Vendedor: <strong style={{ color: '#60a5fa' }}>{customer360.customer.salesperson_name || 'Sin Asignar'}</strong></span>
+                      </span>
+
+                      <span>•</span>
+
+                      <span>
+                        Riesgo: <strong style={{
+                          color: (customer360.customer.risk_score || 'A') === 'A' ? '#10b981' :
+                                 (customer360.customer.risk_score === 'B') ? '#3b82f6' :
+                                 (customer360.customer.risk_score === 'C') ? '#f59e0b' : '#ef4444'
+                        }}>
+                          Categoría {customer360.customer.risk_score || 'A'}
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: Quick Action Buttons & Close */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {onNavigate && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomer360(null);
+                        onNavigate('pos');
+                      }}
+                      className="btn btn-sm btn-primary"
+                      style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)' }}
+                    >
+                      <ShoppingCart size={14} />
+                      <span>Facturar en POS</span>
+                    </button>
+                  )}
+
+                  {onNavigate && Number(customer360.kpis?.pending_balance || 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomer360(null);
+                        onNavigate('collections');
+                      }}
+                      className="btn btn-sm btn-primary"
+                      style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+                    >
+                      <HandCoins size={14} />
+                      <span>Cobrar Deuda</span>
+                    </button>
+                  )}
+
+                  {customer360.customer.phone && (
+                    <a
+                      href={`https://wa.me/1${customer360.customer.phone.replace(/[^0-9]/g, '')}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-sm"
+                      style={{ background: 'rgba(34, 197, 94, 0.15)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.3)' }}
+                      title="Chatear por WhatsApp"
+                    >
+                      <MessageCircle size={14} />
+                      <span>WhatsApp</span>
+                    </a>
+                  )}
+
+                  {customer360.customer.phone && (
+                    <a
+                      href={`tel:${customer360.customer.phone}`}
+                      className="btn btn-sm btn-secondary"
+                      title="Llamar Cliente"
+                    >
+                      <PhoneCall size={14} />
+                    </a>
+                  )}
+
+                  <button
+                    onClick={() => setCustomer360(null)}
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '6px 8px', borderRadius: '8px' }}
+                  >
+                    <X size={18} />
                   </button>
                 </div>
-                <div className="table-container">
-                  <table className="custom-table">
-                    <thead>
-                      <tr>
-                        <th>Factura</th>
-                        <th>Emisión</th>
-                        <th>Vencimiento</th>
-                        <th>Total</th>
-                        <th>Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {customer360.receivables?.map(r => (
-                        <tr key={r.id}>
-                          <td>{r.invoice_number || r.ncf}</td>
-                          <td>{r.issue_date}</td>
-                          <td>{r.due_date}</td>
-                          <td>RD$ {Number(r.amount).toFixed(2)}</td>
-                          <td style={{ fontWeight: 800, color: '#38bdf8' }}>RD$ {Number(r.balance).toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              </div>
+
+              {/* TOP 4 KEY METRIC CARDS */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginTop: '16px' }}>
+                {/* Balance Pendiente */}
+                <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Balance Pendiente
+                    </span>
+                    <DollarSign size={14} color={Number(customer360.kpis?.pending_balance || 0) > 0 ? '#f59e0b' : '#10b981'} />
+                  </div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: Number(customer360.kpis?.pending_balance || 0) > 0 ? '#f59e0b' : '#10b981' }}>
+                    RD$ {Number(customer360.kpis?.pending_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: Number(customer360.kpis?.overdue_balance || 0) > 0 ? '#ef4444' : 'var(--text-secondary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {Number(customer360.kpis?.overdue_balance || 0) > 0 ? (
+                      <>⚠️ RD$ {Number(customer360.kpis?.overdue_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })} vencido ({customer360.kpis?.overdue_invoices_count || 0} facturas)</>
+                    ) : (
+                      <>✅ Sin facturas vencidas</>
+                    )}
+                  </div>
+                </div>
+
+                {/* Línea de Crédito & Utilización */}
+                <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Línea de Crédito
+                    </span>
+                    <CreditCard size={14} color="#60a5fa" />
+                  </div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    RD$ {Number(customer360.customer.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                  </div>
+                  {/* Progress Bar */}
+                  <div style={{ width: '100%', height: '5px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', margin: '6px 0 4px', overflow: 'hidden' }}>
+                    <div style={{
+                      width: `${customer360.customer.credit_used_percent || 0}%`,
+                      height: '100%',
+                      background: (customer360.customer.credit_used_percent || 0) > 90 ? '#ef4444' : (customer360.customer.credit_used_percent || 0) > 60 ? '#f59e0b' : '#3b82f6',
+                      borderRadius: '4px',
+                      transition: 'width 0.4s ease'
+                    }} />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                    <span>Usado: {customer360.customer.credit_used_percent || 0}%</span>
+                    <span style={{ color: '#38bdf8' }}>Disp: RD$ {Number(customer360.customer.credit_available || 0).toLocaleString('es-DO', { minimumFractionDigits: 0 })}</span>
+                  </div>
+                </div>
+
+                {/* Total Comprado Histórico */}
+                <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Compras Históricas
+                    </span>
+                    <TrendingUp size={14} color="#a78bfa" />
+                  </div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    RD$ {Number(customer360.kpis?.total_purchased_history || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#a78bfa', marginTop: '2px' }}>
+                    Este año: RD$ {Number(customer360.kpis?.purchases_year || 0).toLocaleString('es-DO', { minimumFractionDigits: 0 })} ({customer360.invoices?.length || 0} facturas)
+                  </div>
+                </div>
+
+                {/* Última Actividad / Frecuencia */}
+                <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Última Compra
+                    </span>
+                    <Clock size={14} color="#10b981" />
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    {customer360.customer.days_without_purchase !== null && customer360.customer.days_without_purchase !== undefined
+                      ? `Hace ${customer360.customer.days_without_purchase} días`
+                      : 'Sin Compras'}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    {customer360.customer.last_purchase_date
+                      ? new Date(customer360.customer.last_purchase_date).toLocaleDateString('es-DO')
+                      : 'N/A'} • {customer360.customer.credit_days || 30} días de plazo
+                  </div>
                 </div>
               </div>
-            )}
+            </div>
+
+            {/* REFINED 9-TAB NAVIGATION BAR */}
+            <div style={{
+              display: 'flex',
+              gap: '6px',
+              overflowX: 'auto',
+              borderBottom: '1px solid var(--border-color)',
+              paddingBottom: '8px',
+              marginBottom: '18px',
+              scrollbarWidth: 'thin'
+            }}>
+              {[
+                { id: 'general', label: 'Perfil General', icon: Building2 },
+                { id: 'conditions', label: 'Crédito & Riesgo', icon: ShieldAlert },
+                { id: 'sales', label: 'Facturas', count: customer360.invoices?.length || 0, icon: Receipt },
+                { id: 'cxc', label: 'Cuentas por Cobrar', count: customer360.receivables?.length || 0, icon: Clock, alert: Number(customer360.kpis?.overdue_balance || 0) > 0 },
+                { id: 'payments', label: 'Historial de Pagos', count: customer360.payments?.length || 0, icon: HandCoins },
+                { id: 'stats', label: 'Métricas & Tendencia', icon: Activity },
+                { id: 'notes', label: 'Notas & Cobranza', count: customer360.collection_notes?.length || 0, icon: MessageCircle },
+                { id: 'geo', label: 'Ubicación GPS', icon: MapPin },
+                { id: 'statement', label: 'Estado de Cuenta', icon: FileText }
+              ].map(t => {
+                const IconComponent = t.icon;
+                const isActive = active360Tab === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setActive360Tab(t.id)}
+                    className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{
+                      borderRadius: '10px',
+                      fontSize: '0.8rem',
+                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '7px',
+                      padding: '8px 14px',
+                      background: isActive ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.04)',
+                      borderColor: isActive ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.08)'
+                    }}
+                  >
+                    <IconComponent size={14} color={isActive ? '#fff' : 'var(--text-muted)'} />
+                    <span>{t.label}</span>
+                    {t.count !== undefined && (
+                      <span
+                        style={{
+                          background: isActive ? 'rgba(255, 255, 255, 0.25)' : t.alert ? 'rgba(239, 68, 68, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                          color: isActive ? '#fff' : t.alert ? '#ef4444' : 'var(--text-secondary)',
+                          fontSize: '0.68rem',
+                          fontWeight: 700,
+                          padding: '1px 6px',
+                          borderRadius: '10px'
+                        }}
+                      >
+                        {t.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* TAB CONTENT AREA */}
+            <div style={{ minHeight: '340px' }}>
+              {/* 1. DATOS GENERALES */}
+              {active360Tab === 'general' && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+                  {/* Card: Datos de Contacto */}
+                  <div className="card" style={{ padding: '18px', background: 'var(--bg-subtle)' }}>
+                    <h4 style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Building2 size={16} color="var(--accent-primary)" />
+                      <span>Identificación & Contacto</span>
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Razón Social / Nombre Completo</span>
+                        <p style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+                          {customer360.customer.company_name || `${customer360.customer.first_name || ''} ${customer360.customer.last_name || ''}`}
+                        </p>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Tipo de Persona</span>
+                          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px', textTransform: 'capitalize' }}>
+                            {customer360.customer.person_type === 'juridica' ? 'Persona Jurídica (Empresa)' : 'Persona Natural / Física'}
+                          </p>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>RNC / Cédula</span>
+                          <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#38bdf8', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                            {customer360.customer.tax_id || customer360.customer.id_card || 'Consumidor Final'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Teléfono Principal</span>
+                          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+                            {customer360.customer.phone || 'No registrado'}
+                          </p>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Correo Electrónico</span>
+                          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px', wordBreak: 'break-all' }}>
+                            {customer360.customer.email || 'No registrado'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card: Ubicación & Logística */}
+                  <div className="card" style={{ padding: '18px', background: 'var(--bg-subtle)' }}>
+                    <h4 style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <MapPin size={16} color="#10b981" />
+                      <span>Ubicación de Despacho</span>
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Dirección Física</span>
+                        <p style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+                          {customer360.customer.address || 'Santo Domingo, República Dominicana'}
+                        </p>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Ciudad / Municipio</span>
+                          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+                            {customer360.customer.city || 'Santo Domingo'}
+                          </p>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Zona / Ruta</span>
+                          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+                            {customer360.customer.zone || 'Metropolitana'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {customer360.customer.latitude && customer360.customer.longitude && (
+                        <div style={{ marginTop: '6px' }}>
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${customer360.customer.latitude},${customer360.customer.longitude}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn btn-sm btn-secondary"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                          >
+                            <ExternalLink size={13} />
+                            <span>Ver en Google Maps ({customer360.customer.latitude.toFixed(4)}, {customer360.customer.longitude.toFixed(4)})</span>
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Card: Comercial & Vendedor */}
+                  <div className="card" style={{ padding: '18px', background: 'var(--bg-subtle)' }}>
+                    <h4 style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Award size={16} color="#f59e0b" />
+                      <span>Ejecutivo de Cuenta & Ventas</span>
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Vendedor Asignado</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '3px' }}>
+                          <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(96, 165, 250, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#60a5fa', fontWeight: 700, fontSize: '0.85rem' }}>
+                            <UserCheck size={16} />
+                          </div>
+                          <div>
+                            <p style={{ fontSize: '0.95rem', fontWeight: 700, color: '#60a5fa', margin: 0 }}>
+                              {customer360.customer.salesperson_name || 'Carlos Mendoza'}
+                            </p>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                              Código: {customer360.customer.salesperson_code || 'VEND-001'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Descuento Estándar</span>
+                          <p style={{ fontSize: '0.95rem', fontWeight: 700, color: '#a78bfa', marginTop: '2px' }}>
+                            {customer360.customer.discount_percent || 0}%
+                          </p>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Estado del Cliente</span>
+                          <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#10b981', marginTop: '2px', textTransform: 'uppercase' }}>
+                            {customer360.customer.status || 'Activo'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 2. CONDICIONES DE CRÉDITO & RIESGO */}
+              {active360Tab === 'conditions' && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
+                  {/* Credit Line Status Card */}
+                  <div className="card" style={{ padding: '20px', background: 'var(--bg-subtle)' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <CreditCard size={18} color="var(--accent-primary)" />
+                      <span>Parámetros de la Línea de Crédito</span>
+                    </h4>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Límite de Crédito Autorizado:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                          RD$ {Number(customer360.customer.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Saldo Utilizado / Por Cobrar:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 800, color: Number(customer360.customer.current_balance || 0) > 0 ? '#f59e0b' : 'var(--text-muted)' }}>
+                          RD$ {Number(customer360.customer.current_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Crédito Disponible Actual:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#10b981' }}>
+                          RD$ {Number(customer360.customer.credit_available || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Plazo de Pago (Días):</span>
+                        <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#60a5fa' }}>
+                          {customer360.customer.credit_days || 30} días
+                        </span>
+                      </div>
+
+                      {/* Toggle block credit button */}
+                      <div style={{ marginTop: '10px', paddingTop: '12px', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Estado de Bloqueo:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleCreditBlock(customer360.customer.id)}
+                          className={`btn btn-sm ${customer360.customer.is_credit_blocked === 1 ? 'btn-danger' : 'btn-secondary'}`}
+                          style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                        >
+                          {customer360.customer.is_credit_blocked === 1 ? (
+                            <><Unlock size={14} /> <span>Desbloquear Crédito</span></>
+                          ) : (
+                            <><Lock size={14} /> <span>Bloquear Crédito</span></>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Risk Assessment Card */}
+                  <div className="card" style={{ padding: '20px', background: 'var(--bg-subtle)' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <ShieldAlert size={18} color="#f59e0b" />
+                      <span>Evaluación de Riesgo & Puntualidad</span>
+                    </h4>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--bg-main)', padding: '12px', borderRadius: '10px' }}>
+                        <div style={{
+                          width: '44px',
+                          height: '44px',
+                          borderRadius: '10px',
+                          background: (customer360.customer.risk_score || 'A') === 'A' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 900,
+                          fontSize: '1.3rem',
+                          color: (customer360.customer.risk_score || 'A') === 'A' ? '#10b981' : '#f59e0b'
+                        }}>
+                          {customer360.customer.risk_score || 'A'}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Clasificación de Riesgo: {(customer360.customer.risk_score || 'A') === 'A' ? 'Bajo Riesgo (Excelente)' : customer360.customer.risk_score === 'B' ? 'Riesgo Moderado' : 'Alto Riesgo'}
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                            {(customer360.customer.risk_score || 'A') === 'A'
+                              ? 'Cliente con excelente historial de cumplimiento y pagos puntuales.'
+                              : 'Monitorear vencimientos de facturas antes de conceder sobregiros.'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div style={{ background: 'var(--bg-main)', padding: '10px', borderRadius: '8px' }}>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Facturas Vencidas</span>
+                          <p style={{ fontSize: '1.1rem', fontWeight: 800, color: Number(customer360.kpis?.overdue_invoices_count || 0) > 0 ? '#ef4444' : '#10b981', marginTop: '2px' }}>
+                            {customer360.kpis?.overdue_invoices_count || 0} facturas
+                          </p>
+                        </div>
+                        <div style={{ background: 'var(--bg-main)', padding: '10px', borderRadius: '8px' }}>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Monto en Mora</span>
+                          <p style={{ fontSize: '1.1rem', fontWeight: 800, color: Number(customer360.kpis?.overdue_balance || 0) > 0 ? '#ef4444' : '#10b981', marginTop: '2px' }}>
+                            RD$ {Number(customer360.kpis?.overdue_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 0 })}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 3. FACTURAS DE VENTA */}
+              {active360Tab === 'sales' && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      Total de Facturas Emitidas: <strong>{customer360.invoices?.length || 0}</strong>
+                    </span>
+                  </div>
+                  <div className="table-container" style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                    <table className="custom-table">
+                      <thead>
+                        <tr>
+                          <th>No. Factura</th>
+                          <th>NCF Fiscal</th>
+                          <th>Fecha Emisión</th>
+                          <th>Tipo Venta</th>
+                          <th>Monto Total</th>
+                          <th>Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {!customer360.invoices || customer360.invoices.length === 0 ? (
+                          <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay facturas registradas para este cliente.</td></tr>
+                        ) : (
+                          customer360.invoices.map(s => (
+                            <tr key={s.id}>
+                              <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{s.sale_number}</td>
+                              <td style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>{s.ncf || '-'}</td>
+                              <td>{new Date(s.created_at).toLocaleDateString('es-DO')}</td>
+                              <td style={{ textTransform: 'capitalize' }}>
+                                <span className={`badge ${s.sale_type === 'credit' ? 'badge-warning' : 'badge-info'}`}>
+                                  {s.sale_type === 'credit' ? 'Crédito' : 'Contado'}
+                                </span>
+                              </td>
+                              <td style={{ fontWeight: 800, color: 'var(--text-primary)' }}>RD$ {Number(s.total).toFixed(2)}</td>
+                              <td>
+                                <span className={`badge ${s.status === 'cancelled' ? 'badge-danger' : 'badge-success'}`}>
+                                  {s.status === 'cancelled' ? 'Anulada' : 'Emitida'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* 4. CUENTAS POR COBRAR (CxC) */}
+              {active360Tab === 'cxc' && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      Facturas con Saldo Abierto: <strong>{customer360.receivables?.length || 0}</strong> • Saldo Total: <strong style={{ color: '#f59e0b' }}>RD$ {Number(customer360.kpis?.pending_balance || 0).toFixed(2)}</strong>
+                    </span>
+                  </div>
+                  <div className="table-container" style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                    <table className="custom-table">
+                      <thead>
+                        <tr>
+                          <th>Factura</th>
+                          <th>NCF</th>
+                          <th>Emisión</th>
+                          <th>Vencimiento</th>
+                          <th>Monto Original</th>
+                          <th>Saldo Pendiente</th>
+                          <th>Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {!customer360.receivables || customer360.receivables.length === 0 ? (
+                          <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--success)' }}>🎉 Este cliente no tiene cuentas pendientes de cobro (Al día).</td></tr>
+                        ) : (
+                          customer360.receivables.map(ar => (
+                            <tr key={ar.id}>
+                              <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{ar.invoice_number || ar.sale_number}</td>
+                              <td style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>{ar.ncf || '-'}</td>
+                              <td>{ar.issue_date}</td>
+                              <td>{ar.due_date}</td>
+                              <td>RD$ {Number(ar.amount).toFixed(2)}</td>
+                              <td style={{ fontWeight: 800, color: Number(ar.balance) > 0 ? '#f59e0b' : '#10b981' }}>
+                                RD$ {Number(ar.balance).toFixed(2)}
+                              </td>
+                              <td>
+                                <span className={`badge ${ar.status === 'paid' ? 'badge-success' : ar.status === 'overdue' ? 'badge-danger' : 'badge-warning'}`}>
+                                  {ar.status === 'paid' ? 'Pagada' : ar.status === 'overdue' ? 'Vencida' : 'Pendiente'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* 5. HISTORIAL DE PAGOS */}
+              {active360Tab === 'payments' && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      Total de Pagos Registrados: <strong>{customer360.payments?.length || 0}</strong>
+                    </span>
+                  </div>
+                  <div className="table-container" style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                    <table className="custom-table">
+                      <thead>
+                        <tr>
+                          <th>Fecha Pago</th>
+                          <th>Monto Pagado</th>
+                          <th>Método de Pago</th>
+                          <th>No. Comprobante / Recibo</th>
+                          <th>Notas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {!customer360.payments || customer360.payments.length === 0 ? (
+                          <tr><td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay pagos registrados aún.</td></tr>
+                        ) : (
+                          customer360.payments.map(p => (
+                            <tr key={p.id}>
+                              <td>{p.payment_date}</td>
+                              <td style={{ fontWeight: 800, color: '#10b981' }}>RD$ {Number(p.total_amount).toFixed(2)}</td>
+                              <td style={{ textTransform: 'capitalize' }}>
+                                <span className="badge" style={{ background: 'var(--bg-subtle-2)', color: 'var(--text-primary)' }}>
+                                  {p.payment_method === 'cash' ? '💵 Efectivo' : p.payment_method === 'transfer' ? '🏦 Transferencia' : p.payment_method === 'check' ? '🧾 Cheque' : '💳 Tarjeta'}
+                                </span>
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{p.receipt_number || p.reference_number || '-'}</td>
+                              <td style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{p.notes || '-'}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* 6. MÉTRICAS & COMPORTAMIENTO (MONTHLY BAR CHART) */}
+              {active360Tab === 'stats' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                    <div className="card" style={{ padding: '16px', background: 'var(--bg-subtle)' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Compras del Año Actual</span>
+                      <p style={{ fontSize: '1.3rem', fontWeight: 800, color: '#38bdf8', marginTop: '4px' }}>
+                        RD$ {Number(customer360.kpis?.purchases_year || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+
+                    <div className="card" style={{ padding: '16px', background: 'var(--bg-subtle)' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Compras del Mes Actual</span>
+                      <p style={{ fontSize: '1.3rem', fontWeight: 800, color: '#10b981', marginTop: '4px' }}>
+                        RD$ {Number(customer360.kpis?.purchases_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+
+                    <div className="card" style={{ padding: '16px', background: 'var(--bg-subtle)' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Promedio Mensual de Compra</span>
+                      <p style={{ fontSize: '1.3rem', fontWeight: 800, color: '#a78bfa', marginTop: '4px' }}>
+                        RD$ {Number(customer360.kpis?.monthly_purchase_avg || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+
+                    <div className="card" style={{ padding: '16px', background: 'var(--bg-subtle)' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Último Pago Recibido</span>
+                      <p style={{ fontSize: '1.3rem', fontWeight: 800, color: '#10b981', marginTop: '4px' }}>
+                        RD$ {Number(customer360.kpis?.last_payment_amount || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Visual 12-Month Bar Chart */}
+                  <div className="card" style={{ padding: '20px', background: 'var(--bg-subtle)' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Activity size={18} color="var(--accent-primary)" />
+                      <span>Evolución de Compras Mensuales (Últimos 12 Meses)</span>
+                    </h4>
+
+                    {(!customer360.monthly_behavior || customer360.monthly_behavior.length === 0) ? (
+                      <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '30px 0' }}>No hay registros de compras en los últimos meses.</p>
+                    ) : (
+                      (() => {
+                        const maxAmt = Math.max(...customer360.monthly_behavior.map(m => Number(m.amount) || 0), 1000);
+                        return (
+                          <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', height: '180px', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                            {customer360.monthly_behavior.map((m, idx) => {
+                              const heightPct = Math.min(100, Math.max(10, Math.round((Number(m.amount) / maxAmt) * 100)));
+                              return (
+                                <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', gap: '6px' }}>
+                                  <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#38bdf8' }}>
+                                    {Number(m.amount) > 0 ? `${(Number(m.amount) / 1000).toFixed(0)}k` : '0'}
+                                  </span>
+                                  <div
+                                    title={`${m.month}: RD$ ${Number(m.amount).toFixed(2)} (${m.invoices_count} facturas)`}
+                                    style={{
+                                      width: '100%',
+                                      height: `${heightPct}%`,
+                                      background: 'linear-gradient(180deg, #38bdf8 0%, #2563eb 100%)',
+                                      borderRadius: '6px 6px 0 0',
+                                      transition: 'height 0.3s ease'
+                                    }}
+                                  />
+                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                                    {m.month.slice(5)}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 7. NOTAS Y SEGUIMIENTOS DE COBRANZA */}
+              {active360Tab === 'notes' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Add Note Form */}
+                  <form onSubmit={handleAddCollectionNote} style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                    <label className="label-control" style={{ fontWeight: 700 }}>
+                      Nueva Nota de Seguimiento o Promesa de Pago
+                    </label>
+                    <textarea
+                      required
+                      rows="2"
+                      className="input-control"
+                      placeholder="Ej: Se contactó a la administradora. Confirma que emitirá cheque el próximo viernes..."
+                      value={newNoteText}
+                      onChange={(e) => setNewNoteText(e.target.value)}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Calendar size={15} color="var(--accent-primary)" />
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Fecha de Promesa de Pago:</span>
+                        <input
+                          type="date"
+                          className="input-control"
+                          value={newPromiseDate}
+                          onChange={(e) => setNewPromiseDate(e.target.value)}
+                          style={{ height: '34px', width: '160px', fontSize: '0.8rem' }}
+                        />
+                      </div>
+                      <button type="submit" disabled={addingNote} className="btn btn-primary btn-sm" style={{ padding: '7px 18px' }}>
+                        <Send size={14} />
+                        <span>{addingNote ? 'Guardando...' : 'Registrar Seguimiento'}</span>
+                      </button>
+                    </div>
+                  </form>
+
+                  {/* Notes Timeline Feed */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {(!customer360.collection_notes || customer360.collection_notes.length === 0) ? (
+                      <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '30px 0' }}>No hay notas de seguimiento registradas para este cliente.</p>
+                    ) : (
+                      customer360.collection_notes.map(cn => (
+                        <div key={cn.id} style={{ padding: '14px', background: 'var(--bg-subtle)', borderRadius: '10px', borderLeft: '4px solid #3b82f6' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                            <span style={{ fontWeight: 700, color: '#60a5fa' }}>{cn.user_name || 'Oficial de Cobranzas'}</span>
+                            <span>{new Date(cn.created_at).toLocaleString('es-DO')}</span>
+                          </div>
+                          <p style={{ fontSize: '0.88rem', color: 'var(--text-primary)', margin: '0 0 6px' }}>{cn.note}</p>
+                          {cn.promised_payment_date && (
+                            <span className="badge badge-warning" style={{ fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <Calendar size={11} />
+                              Promesa de Pago para: <strong>{cn.promised_payment_date}</strong>
+                            </span>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 8. UBICACIÓN GEOGRÁFICA & GPS */}
+              {active360Tab === 'geo' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div style={{ padding: '16px', background: 'var(--bg-subtle)', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                    <div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Coordenadas Registradas</span>
+                      <p style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                        Latitud: {customer360.customer.latitude || '18.4861'} • Longitud: {customer360.customer.longitude || '-69.9312'}
+                      </p>
+                    </div>
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${customer360.customer.latitude || 18.4861},${customer360.customer.longitude || -69.9312}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-primary btn-sm"
+                    >
+                      <Navigation size={14} />
+                      <span>Abrir Ruta en Google Maps</span>
+                    </a>
+                  </div>
+
+                  <div style={{
+                    height: '240px',
+                    background: 'radial-gradient(circle at center, rgba(37, 99, 235, 0.1) 0%, rgba(15, 23, 42, 0.8) 100%)',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '1px solid var(--border-color)',
+                    textAlign: 'center',
+                    padding: '20px'
+                  }}>
+                    <div>
+                      <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+                        <MapPin size={28} color="#10b981" />
+                      </div>
+                      <p style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+                        {customer360.customer.company_name || `${customer360.customer.first_name || ''} ${customer360.customer.last_name || ''}`}
+                      </p>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>
+                        {customer360.customer.address || 'Santo Domingo, República Dominicana'} ({customer360.customer.city || 'Santo Domingo'})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 9. ESTADO DE CUENTA */}
+              {active360Tab === 'statement' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+                        Resumen de Estado de Cuenta y Facturas Pendientes
+                      </h4>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        Corte al día: {new Date().toLocaleDateString('es-DO')}
+                      </span>
+                    </div>
+                    <button onClick={() => window.print()} className="btn btn-secondary btn-sm">
+                      <Printer size={14} />
+                      <span>Imprimir Estado</span>
+                    </button>
+                  </div>
+
+                  <div className="table-container">
+                    <table className="custom-table">
+                      <thead>
+                        <tr>
+                          <th>Factura</th>
+                          <th>NCF</th>
+                          <th>Emisión</th>
+                          <th>Vencimiento</th>
+                          <th>Total Facturado</th>
+                          <th>Saldo Pendiente</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {!customer360.receivables || customer360.receivables.length === 0 ? (
+                          <tr><td colSpan="6" style={{ textAlign: 'center', padding: '24px', color: 'var(--success)' }}>Cliente sin deuda pendiente.</td></tr>
+                        ) : (
+                          customer360.receivables.map(r => (
+                            <tr key={r.id}>
+                              <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{r.invoice_number || r.sale_number}</td>
+                              <td style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>{r.ncf || '-'}</td>
+                              <td>{r.issue_date}</td>
+                              <td>{r.due_date}</td>
+                              <td>RD$ {Number(r.amount).toFixed(2)}</td>
+                              <td style={{ fontWeight: 800, color: '#f59e0b' }}>RD$ {Number(r.balance).toFixed(2)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

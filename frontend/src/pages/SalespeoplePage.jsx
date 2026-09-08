@@ -11,6 +11,12 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
   const { addToast } = useToast();
   const isVendedor = user?.role_slug === 'vendedor';
   const [activeTab, setActiveTab] = useState(isVendedor ? 'commissions' : initialTab); // 'salespeople' | 'commissions'
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(isVendedor ? 'commissions' : initialTab);
+    }
+  }, [initialTab, isVendedor]);
   const [salespeople, setSalespeople] = useState([]);
   const [commissions, setCommissions] = useState([]);
   const [loading, setLoading] = useState(true);

@@ -20,11 +20,20 @@ const InventoryService = {
     reason = ''
   }) => {
     // 1. Get current stock
-    let currentInv = await db.prepare(`
-      SELECT id, quantity, reserved_quantity
-      FROM inventories
-      WHERE warehouse_id = ? AND product_id = ? AND (variant_id = ? OR (variant_id IS NULL AND ? IS NULL))
-    `).get(warehouseId, productId, variantId, variantId);
+    let currentInv;
+    if (variantId) {
+      currentInv = await db.prepare(`
+        SELECT id, quantity, reserved_quantity
+        FROM inventories
+        WHERE warehouse_id = ? AND product_id = ? AND variant_id = ?
+      `).get(warehouseId, productId, variantId);
+    } else {
+      currentInv = await db.prepare(`
+        SELECT id, quantity, reserved_quantity
+        FROM inventories
+        WHERE warehouse_id = ? AND product_id = ? AND variant_id IS NULL
+      `).get(warehouseId, productId);
+    }
 
     const prevQty = currentInv ? Number(currentInv.quantity) : 0;
     const changeQty = Number(quantity);
@@ -33,7 +42,8 @@ const InventoryService = {
     // 2. Check negative stock constraint
     if (newQty < 0) {
       const comp = await db.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
-      if (!comp || comp.allow_negative_inventory === 0) {
+      const allowNegative = comp && (comp.allow_negative_inventory === true || comp.allow_negative_inventory === 1 || comp.allow_negative_inventory === '1');
+      if (!allowNegative) {
         throw new Error(`Inventario insuficiente. Stock actual: ${prevQty}, Solicitado: ${Math.abs(changeQty)}`);
       }
     }
@@ -77,11 +87,20 @@ const InventoryService = {
   },
 
   getCurrentStock: async (warehouseId, productId, variantId = null) => {
-    const row = await db.prepare(`
-      SELECT quantity, reserved_quantity
-      FROM inventories
-      WHERE warehouse_id = ? AND product_id = ? AND (variant_id = ? OR (variant_id IS NULL AND ? IS NULL))
-    `).get(warehouseId, productId, variantId, variantId);
+    let row;
+    if (variantId) {
+      row = await db.prepare(`
+        SELECT quantity, reserved_quantity
+        FROM inventories
+        WHERE warehouse_id = ? AND product_id = ? AND variant_id = ?
+      `).get(warehouseId, productId, variantId);
+    } else {
+      row = await db.prepare(`
+        SELECT quantity, reserved_quantity
+        FROM inventories
+        WHERE warehouse_id = ? AND product_id = ? AND variant_id IS NULL
+      `).get(warehouseId, productId);
+    }
 
     return row ? Number(row.quantity) : 0;
   }

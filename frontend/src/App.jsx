@@ -181,9 +181,10 @@ export default function App() {
 
             {/* Cobros & Finanzas */}
             {currentTab === 'collections' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}
+            {currentTab === 'aging' && <FinancePage user={user} activeBranch={activeBranch} initialTab="aging" />}
             {currentTab === 'collection-history' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}
             {currentTab === 'collection-promises' && <ThirdPartiesPage user={user} initialMode="customers" />}
-            {currentTab === 'cxc-dashboard' && <FinancePage user={user} activeBranch={activeBranch} initialTab="aging" />}
+            {currentTab === 'cxc-dashboard' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}
             {currentTab === 'cxp-dashboard' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxp" />}
             {currentTab === 'expenses' && <FinancePage user={user} activeBranch={activeBranch} initialTab="expenses" />}
             {currentTab === 'finance' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}

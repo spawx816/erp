@@ -41,6 +41,7 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
   // Statement modal & Quick payment modal from side panel
   const [showStatementModal, setShowStatementModal] = useState(false);
   const [statementData, setStatementData] = useState(null);
+  const [statementTab, setStatementTab] = useState('invoices'); // 'invoices' or 'ledger'
   const [loadingStatement, setLoadingStatement] = useState(false);
 
   // Quick Collection Modal from side panel
@@ -54,7 +55,22 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
   const [supervisorCreds, setSupervisorCreds] = useState({ username: '', password: '' });
   const [supervisorReason, setSupervisorReason] = useState('');
 
+  // Customer Autocomplete Search State
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+  const customerDropdownRef = useRef(null);
+
   const barcodeRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target)) {
+        setIsCustomerDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     loadInitialData();
@@ -95,6 +111,8 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
   useEffect(() => {
     if (selectedCustomer?.id) {
       loadCustomerDetails(selectedCustomer.id);
+    } else {
+      setCustomerDetails(null);
     }
   }, [selectedCustomer]);
 
@@ -111,9 +129,8 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
       if (catsRes.success) setCategories(catsRes.data);
       if (custsRes.success) {
         setCustomers(custsRes.data);
-        // Default to first customer or Consumidor Final
-        const defaultCust = custsRes.data.find(c => c.id_card === '000-0000000-0') || custsRes.data[0];
-        setSelectedCustomer(defaultCust);
+        // Start in blank as requested to prevent accidental misallocation
+        setSelectedCustomer(null);
       }
       if (branchRes.success && Array.isArray(branchRes.warehouses)) {
         setAllWarehouses(branchRes.warehouses);
@@ -187,7 +204,28 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
     }
   };
 
-  // Barcode scanner trigger
+  const filteredCustomers = customers.filter(c => {
+    if (!customerSearch.trim()) return true;
+    const q = customerSearch.toLowerCase().trim();
+    const name = (c.company_name || `${c.first_name} ${c.last_name}`).toLowerCase();
+    const taxId = (c.tax_id || c.id_card || '').toLowerCase();
+    const phone = (c.phone || '').toLowerCase();
+    const code = (c.code || '').toLowerCase();
+    return name.includes(q) || taxId.includes(q) || phone.includes(q) || code.includes(q);
+  });
+
+  const handleSelectCustomer = (cust) => {
+    setSelectedCustomer(cust);
+    setIsCustomerDropdownOpen(false);
+    setCustomerSearch('');
+  };
+
+  const handleClearCustomer = () => {
+    setSelectedCustomer(null);
+    setCustomerDetails(null);
+    setCustomerSearch('');
+    setIsCustomerDropdownOpen(false);
+  };
   const handleBarcodeScan = async (e) => {
     if (e.key === 'Enter' && barcodeInput.trim()) {
       e.preventDefault();
@@ -297,6 +335,14 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
   const handleOpenPayment = () => {
     if (cart.length === 0) return;
 
+    if (!activeSession) {
+      addToast('No hay un turno de caja abierto en esta sucursal. Debe aperturar caja antes de facturar.', 'warning');
+      if (onOpenCashModal) {
+        onOpenCashModal();
+      }
+      return;
+    }
+
     if (!selectedWarehouseId && warehouses.length > 0) {
       setSelectedWarehouseId(warehouses[0].id);
     }
@@ -315,6 +361,10 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
   const handleProcessCheckout = async () => {
     // If credit sale, check credit available
     if (paymentMethod === 'credit') {
+      if (!selectedCustomer) {
+        addToast('Debe seleccionar un cliente con línea de crédito autorizada para ventas a crédito.', 'error');
+        return;
+      }
       if (custCreditLimit <= 0) {
         addToast('El cliente no posee línea de crédito autorizada.', 'error');
         return;
@@ -324,6 +374,12 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
         setShowSupervisorModal(true);
         return;
       }
+    }
+
+    // If fiscal invoice B01, B14, B15, require registered customer with tax ID
+    if (['B01', 'B14', 'B15'].includes(fiscalType) && (!selectedCustomer || !selectedCustomer.tax_id)) {
+      addToast(`Para comprobantes fiscales ${fiscalType} es obligatorio seleccionar un cliente con RNC o Cédula registrado.`, 'warning');
+      return;
     }
 
     setLoadingCheckout(true);
@@ -343,8 +399,14 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
         payments = paymentBreakdown;
       }
 
+      let targetCustomerId = selectedCustomer?.id;
+      if (!targetCustomerId) {
+        const defaultCust = customers.find(c => c.id_card === '000-0000000-0') || customers[0];
+        targetCustomerId = defaultCust?.id || 1;
+      }
+
       const payload = {
-        customer_id: selectedCustomer?.id,
+        customer_id: targetCustomerId,
         warehouse_id: selectedWarehouseId || (warehouses[0]?.id),
         fiscal_type_code: fiscalType,
         discount_percent: discountPercent,
@@ -384,7 +446,12 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
         if (selectedCustomer) loadCustomerDetails(selectedCustomer.id);
       }
     } catch (err) {
-      addToast(err.message || 'Error procesando la venta.', 'error');
+      if (err.requires_cash_open || (err.message && err.message.toLowerCase().includes('caja'))) {
+        addToast(err.message || 'Se requiere una caja abierta para procesar ventas.', 'error');
+        if (onOpenCashModal) onOpenCashModal();
+      } else {
+        addToast(err.message || 'Error procesando la venta.', 'error');
+      }
     } finally {
       setLoadingCheckout(false);
     }
@@ -410,6 +477,32 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
     }}>
       {/* COLUMN 1: Catalog, Barcode Scan & Search */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'hidden' }}>
+        {/* Cash Session Status Banner */}
+        {!activeSession && (
+          <div style={{
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            borderRadius: '10px',
+            padding: '10px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444', fontSize: '0.82rem', fontWeight: 600 }}>
+              <AlertTriangle size={18} />
+              <span>Caja Cerrada: No hay un turno de caja activo en esta sucursal.</span>
+            </div>
+            <button
+              onClick={onOpenCashModal}
+              className="btn btn-sm btn-primary"
+              style={{ background: '#ef4444', borderColor: '#ef4444', whiteSpace: 'nowrap', fontSize: '0.75rem', padding: '5px 12px', fontWeight: 700 }}
+            >
+              Abrir Turno de Caja
+            </button>
+          </div>
+        )}
+
         {/* Barcode & Search Controls */}
         <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '10px' }}>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
@@ -568,7 +661,7 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
           </div>
 
           {/* Customer Selection & Side Panel Toggle */}
-          <div>
+          <div ref={customerDropdownRef} style={{ position: 'relative' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <label style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Cliente Asignado</label>
               <button
@@ -577,25 +670,176 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
                 style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '0.72rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
               >
                 <UserCheck size={12} />
-                <span>{showCustomerSidePanel ? 'Ocultar Panel' : 'Ver Ficha'}</span>
+                <span>{showCustomerSidePanel ? 'Ocultar Ficha' : 'Ver Ficha'}</span>
               </button>
             </div>
 
-            <select
-              className="select-control"
-              value={selectedCustomer?.id || ''}
-              onChange={(e) => {
-                const found = customers.find(c => c.id === parseInt(e.target.value, 10));
-                setSelectedCustomer(found);
-              }}
-              style={{ height: '34px', fontSize: '0.78rem', padding: '4px 8px' }}
-            >
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.company_name || `${c.first_name} ${c.last_name}`} {c.tax_id ? `(${c.tax_id})` : ''}
-                </option>
-              ))}
-            </select>
+            {selectedCustomer ? (
+              /* SELECTED CUSTOMER CHIP CARD */
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '6px 10px',
+                background: 'rgba(59, 130, 246, 0.08)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                borderRadius: '8px',
+                gap: '8px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', flex: 1 }}>
+                  <div style={{
+                    width: '26px',
+                    height: '26px',
+                    borderRadius: '50%',
+                    background: 'var(--accent-primary)',
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    flexShrink: 0
+                  }}>
+                    {(selectedCustomer.company_name || selectedCustomer.first_name || 'C')[0].toUpperCase()}
+                  </div>
+                  <div style={{ overflow: 'hidden', flex: 1 }}>
+                    <p style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {selectedCustomer.company_name || `${selectedCustomer.first_name} ${selectedCustomer.last_name}`}
+                    </p>
+                    <p style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                      RNC/Céd: {selectedCustomer.tax_id || selectedCustomer.id_card || 'Consumidor Final'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClearCustomer}
+                  className="btn btn-secondary btn-sm"
+                  title="Quitar cliente y dejar en blanco"
+                  style={{ padding: '3px 7px', height: '24px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--danger)' }}
+                >
+                  <X size={12} />
+                  <span>Quitar</span>
+                </button>
+              </div>
+            ) : (
+              /* SEARCH INPUT WITH DROPDOWN */
+              <div style={{ position: 'relative' }}>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <Search size={14} color="var(--text-muted)" style={{ position: 'absolute', left: '10px' }} />
+                  <input
+                    type="text"
+                    className="input-control"
+                    placeholder="Buscar cliente (Nombre, RNC, Cédula)..."
+                    value={customerSearch}
+                    onChange={(e) => {
+                      setCustomerSearch(e.target.value);
+                      setIsCustomerDropdownOpen(true);
+                    }}
+                    onFocus={() => setIsCustomerDropdownOpen(true)}
+                    style={{ paddingLeft: '32px', paddingRight: customerSearch ? '28px' : '10px', height: '34px', fontSize: '0.78rem' }}
+                  />
+                  {customerSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomerSearch('')}
+                      style={{ position: 'absolute', right: '8px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                {isCustomerDropdownOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    marginTop: '4px',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.4)',
+                    maxHeight: '230px',
+                    overflowY: 'auto',
+                    zIndex: 60,
+                    padding: '4px'
+                  }}>
+                    {/* Quick Select Consumidor Final */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cf = customers.find(c => c.id_card === '000-0000000-0') || { id: null, company_name: 'Consumidor Final Mostrador', first_name: 'Consumidor', last_name: 'Final', tax_id: null, id_card: '000-0000000-0' };
+                        handleSelectCustomer(cf);
+                      }}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '6px 8px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: 'rgba(59, 130, 246, 0.1)',
+                        color: '#60a5fa',
+                        cursor: 'pointer',
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        marginBottom: '4px',
+                        textAlign: 'left'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Sparkles size={13} />
+                        <span>⚡ Consumidor Final (Venta Rápida)</span>
+                      </div>
+                      <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>Sin RNC</span>
+                    </button>
+
+                    {filteredCustomers.length === 0 ? (
+                      <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                        No se encontraron clientes coincidentes.
+                      </div>
+                    ) : (
+                      filteredCustomers.map(cust => (
+                        <div
+                          key={cust.id}
+                          onClick={() => handleSelectCustomer(cust)}
+                          style={{
+                            padding: '7px 9px',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '2px',
+                            borderBottom: '1px solid var(--border-color)',
+                            transition: 'background 0.15s ease'
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-subtle)'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {cust.company_name || `${cust.first_name} ${cust.last_name}`}
+                            </span>
+                            {cust.credit_limit > 0 && (
+                              <span className="badge badge-info" style={{ fontSize: '0.62rem' }}>
+                                Crédito RD$ {Number(cust.credit_limit).toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>{cust.tax_id || cust.id_card || 'Sin RNC'}</span>
+                            <span>{cust.salesperson_name ? `Vend: ${cust.salesperson_name}` : (cust.city || '')}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Permanent Salesperson Auto-assigned Badge */}
             {selectedCustomer && (
@@ -951,37 +1195,122 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
                   </div>
                 </div>
 
-                {/* Ledger table */}
-                <div className="table-container" style={{ maxHeight: '280px', overflowY: 'auto' }}>
-                  <table className="custom-table">
-                    <thead>
-                      <tr>
-                        <th>Fecha</th>
-                        <th>Factura / NCF</th>
-                        <th>Vencimiento</th>
-                        <th>Monto Original</th>
-                        <th>Balance Pendiente</th>
-                        <th>Estado</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {statementData.invoices?.map(inv => (
-                        <tr key={inv.id}>
-                          <td>{inv.issue_date}</td>
-                          <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{inv.invoice_number || inv.ncf}</td>
-                          <td style={{ color: inv.is_overdue ? 'var(--danger)' : 'inherit' }}>{inv.due_date}</td>
-                          <td>RD$ {Number(inv.amount).toFixed(2)}</td>
-                          <td style={{ fontWeight: 800, color: '#38bdf8' }}>RD$ {Number(inv.balance).toFixed(2)}</td>
-                          <td>
-                            <span className={`badge ${inv.status === 'paid' ? 'badge-success' : inv.status === 'overdue' ? 'badge-danger' : 'badge-warning'}`}>
-                              {inv.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                {/* Tab Switcher */}
+                <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setStatementTab('invoices')}
+                    className={`btn btn-sm ${statementTab === 'invoices' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.76rem' }}
+                  >
+                    Facturas & Saldos ({statementData.invoices?.length || 0})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatementTab('ledger')}
+                    className={`btn btn-sm ${statementTab === 'ledger' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.76rem' }}
+                  >
+                    Libro Mayor / Movimientos ({statementData.ledger?.length || 0})
+                  </button>
                 </div>
+
+                {/* Invoices Table */}
+                {statementTab === 'invoices' && (
+                  <div className="table-container" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                    <table className="custom-table">
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Factura / NCF</th>
+                          <th>Vencimiento</th>
+                          <th style={{ textAlign: 'right' }}>Monto Total</th>
+                          <th style={{ textAlign: 'right' }}>Balance Pendiente</th>
+                          <th style={{ textAlign: 'center' }}>Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {!statementData.invoices || statementData.invoices.length === 0 ? (
+                          <tr>
+                            <td colSpan="6" style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
+                              No hay facturas registradas para este cliente.
+                            </td>
+                          </tr>
+                        ) : (
+                          statementData.invoices.map(inv => (
+                            <tr key={inv.id}>
+                              <td>{inv.issue_date || '-'}</td>
+                              <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{inv.invoice_number || inv.ncf || inv.sale_number}</td>
+                              <td style={{ color: inv.is_overdue ? 'var(--danger)' : 'inherit', fontWeight: inv.is_overdue ? 700 : 400 }}>
+                                {inv.due_date || 'Inmediato'}
+                                {inv.is_overdue && <span style={{ fontSize: '0.68rem', marginLeft: '4px' }}>({inv.days_overdue}d)</span>}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>RD$ {Number(inv.amount || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 800, color: Number(inv.balance) > 0 ? '#38bdf8' : 'var(--success)' }}>
+                                RD$ {Number(inv.balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <span className={`badge ${inv.status === 'paid' ? 'badge-success' : inv.status === 'overdue' || inv.is_overdue ? 'badge-danger' : 'badge-warning'}`}>
+                                  {inv.is_overdue ? 'Vencida' : inv.status === 'paid' ? 'Pagada' : 'Pendiente'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Ledger Table */}
+                {statementTab === 'ledger' && (
+                  <div className="table-container" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                    <table className="custom-table">
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Tipo</th>
+                          <th>Documento</th>
+                          <th>NCF</th>
+                          <th style={{ textAlign: 'right' }}>Débito (+)</th>
+                          <th style={{ textAlign: 'right' }}>Crédito (-)</th>
+                          <th style={{ textAlign: 'right' }}>Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {!statementData.ledger || statementData.ledger.length === 0 ? (
+                          <tr>
+                            <td colSpan="7" style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
+                              No hay movimientos históricos en el libro mayor.
+                            </td>
+                          </tr>
+                        ) : (
+                          statementData.ledger.map((entry, idx) => (
+                            <tr key={idx}>
+                              <td>{entry.date ? new Date(entry.date).toISOString().split('T')[0] : '-'}</td>
+                              <td>
+                                <span className={`badge ${entry.doc_type === 'Factura' ? 'badge-info' : entry.doc_type === 'Nota de Crédito' ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '0.68rem' }}>
+                                  {entry.doc_type}
+                                </span>
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{entry.document || entry.invoice_number || '-'}</td>
+                              <td style={{ fontFamily: 'var(--font-mono)' }}>{entry.ncf || '-'}</td>
+                              <td style={{ textAlign: 'right', color: entry.debit > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                                {entry.debit > 0 ? `RD$ ${Number(entry.debit).toLocaleString('es-DO', { minimumFractionDigits: 2 })}` : '-'}
+                              </td>
+                              <td style={{ textAlign: 'right', color: entry.credit > 0 ? '#10b981' : 'var(--text-muted)', fontWeight: entry.credit > 0 ? 700 : 400 }}>
+                                {entry.credit > 0 ? `RD$ ${Number(entry.credit).toLocaleString('es-DO', { minimumFractionDigits: 2 })}` : '-'}
+                              </td>
+                              <td style={{ textAlign: 'right', fontWeight: 800, color: entry.balance > 0 ? '#38bdf8' : 'var(--success)' }}>
+                                RD$ {Number(entry.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                   <button onClick={() => window.print()} className="btn btn-secondary">

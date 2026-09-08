@@ -382,22 +382,47 @@ const thirdPartiesController = {
 
       let runningBalance = 0;
       const ledger = allEntries.map(entry => {
-        runningBalance += (entry.debit - entry.credit);
+        runningBalance += (Number(entry.debit) - Number(entry.credit));
         return {
           ...entry,
           balance: runningBalance
         };
       });
 
+      // Query detailed sales invoices with balance and overdue status
+      const invoices = await db.prepare(`
+        SELECT s.id, s.invoice_number, s.ncf, s.sale_number,
+               strftime('%Y-%m-%d', s.created_at) as issue_date,
+               strftime('%Y-%m-%d', s.due_date) as due_date,
+               s.total as amount, s.balance, s.status,
+               (CURRENT_DATE > s.due_date AND s.balance > 0) as is_overdue,
+               CASE WHEN CURRENT_DATE > s.due_date AND s.due_date IS NOT NULL AND s.balance > 0 
+                    THEN (CURRENT_DATE - s.due_date)
+                    ELSE 0 
+               END as days_overdue
+        FROM sales s
+        WHERE s.customer_id = ? AND s.status != 'cancelled'
+        ORDER BY s.created_at DESC
+      `).all(id);
+
+      const openInvoices = invoices.filter(i => Number(i.balance) > 0);
+      const overdueInvoices = invoices.filter(i => i.is_overdue);
+      const overdueBalance = overdueInvoices.reduce((acc, i) => acc + Number(i.balance || 0), 0);
+
       return res.json({
         success: true,
         data: {
           customer,
+          invoices,
+          open_invoices: openInvoices,
           ledger,
           summary: {
-            total_debits: sales.reduce((acc, s) => acc + s.debit, 0),
-            total_credits: payments.reduce((acc, p) => acc + p.credit, 0) + creditNotes.reduce((acc, c) => acc + c.credit, 0),
-            current_balance: runningBalance
+            total_debits: sales.reduce((acc, s) => acc + Number(s.debit || 0), 0),
+            total_credits: payments.reduce((acc, p) => acc + Number(p.credit || 0), 0) + creditNotes.reduce((acc, c) => acc + Number(c.credit || 0), 0),
+            current_balance: Number(customer.current_balance || runningBalance),
+            open_invoices_count: openInvoices.length,
+            overdue_invoices_count: overdueInvoices.length,
+            overdue_balance: overdueBalance
           }
         }
       });
@@ -742,75 +767,9 @@ const thirdPartiesController = {
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
-  },
-
-  // SALESPEOPLE
-  getSalespeople: async (req, res) => {
-    try {
-      const companyId = req.user.company_id;
-      const salespeople = await db.prepare(`
-        SELECT sp.*, u.username
-        FROM salespeople sp
-        LEFT JOIN users u ON sp.user_id = u.id
-        WHERE sp.company_id = ?
-        ORDER BY sp.name ASC
-      `).all(companyId);
-      return res.json({ success: true, data: salespeople });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: 'Error consultando vendedores.', error: err.message });
-    }
-  },
-
-  getSalespersonById: async (req, res) => {
-    try {
-      const companyId = req.user.company_id;
-      const { id } = req.params;
-      const sp = await db.prepare('SELECT * FROM salespeople WHERE id = ? AND company_id = ?').get(id, companyId);
-      if (!sp) return res.status(404).json({ success: false, message: 'Vendedor no encontrado.' });
-      return res.json({ success: true, data: sp });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  },
-
-  createSalesperson: async (req, res) => {
-    try {
-      const companyId = req.user.company_id;
-      const { code, name, phone, email, zone, monthly_goal = 200000, commission_rate = 5, user_id, hire_date } = req.body;
-      if (!code || !name) return res.status(400).json({ success: false, message: 'Código y nombre son obligatorios.' });
-      const stmt = await db.prepare(`
-        INSERT INTO salespeople (company_id, user_id, code, name, phone, email, zone, monthly_goal, commission_rate, hire_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const result = await stmt.run(companyId, user_id || null, code, name, phone || null, email || null, zone || null, monthly_goal, commission_rate, hire_date || null);
-      return res.status(201).json({ success: true, data: { id: result.lastInsertRowid, name } });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  },
-
-  updateSalesperson: async (req, res) => {
-    try {
-      const companyId = req.user.company_id;
-      const { id } = req.params;
-      const { name, phone, email, zone, monthly_goal, commission_rate, status } = req.body;
-      await db.prepare(`
-        UPDATE salespeople
-        SET name = COALESCE(?, name),
-            phone = COALESCE(?, phone),
-            email = COALESCE(?, email),
-            zone = COALESCE(?, zone),
-            monthly_goal = COALESCE(?, monthly_goal),
-            commission_rate = COALESCE(?, commission_rate),
-            status = COALESCE(?, status),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND company_id = ?
-      `).run(name, phone, email, zone, monthly_goal, commission_rate, status, id, companyId);
-      return res.json({ success: true, message: 'Vendedor actualizado correctamente.' });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
   }
 };
+
+module.exports = thirdPartiesController;
 
 module.exports = thirdPartiesController;

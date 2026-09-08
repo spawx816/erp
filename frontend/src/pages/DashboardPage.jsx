@@ -5,14 +5,18 @@ import {
   Building2, CheckCircle2, ChevronRight, RefreshCw,
   Wallet, ShieldAlert, Layers, Target, BarChart3,
   Calendar, FileText, Activity, Percent, Warehouse,
-  Grid3X3, Truck, Boxes
+  Grid3X3, Truck, Boxes, Filter, X
 } from 'lucide-react';
 import api from '../services/api';
 
 export default function DashboardPage({ user, activeBranch, onNavigate }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState('month'); // 'today' | 'week' | 'month' | 'year'
+  const [refreshing, setRefreshing] = useState(false);
+  const [period, setPeriod] = useState('month'); // 'today' | 'week' | 'month' | 'year' | 'custom'
+  const [showCustomDate, setShowCustomDate] = useState(false);
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
 
   const isVendedor = user?.role_slug === 'vendedor';
   const isAlmacen = user?.role_slug === 'almacen';
@@ -24,10 +28,16 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
   const loadDashboard = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/reports/dashboard', {
+      const params = {
         branch_id: activeBranch?.id,
         period
-      });
+      };
+      if (period === 'custom' && customStartDate && customEndDate) {
+        params.start_date = customStartDate;
+        params.end_date = customEndDate;
+      }
+
+      const res = await api.get('/reports/dashboard', params);
       if (res.success) {
         setData(res.data);
       }
@@ -35,6 +45,20 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
       console.error('Failed to load dashboard:', err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadDashboard();
+  };
+
+  const handleApplyCustomDate = (e) => {
+    e.preventDefault();
+    if (customStartDate && customEndDate) {
+      setPeriod('custom');
+      loadDashboard();
     }
   };
 
@@ -49,6 +73,17 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
   const kpis = data?.kpis || {};
   const charts = data?.charts || {};
   const alerts = data?.alerts || [];
+  const periodInfo = data?.period || {};
+  const salespersonProfile = data?.salesperson_profile || null;
+  const sellerGoal = salespersonProfile?.monthly_goal || 350000;
+  const sellerCommissionRate = salespersonProfile?.commission_rate || 5.0;
+
+  const currentPeriodLabel = periodInfo.label || (
+    period === 'today' ? 'Hoy' :
+    period === 'week' ? 'Esta Semana' :
+    period === 'year' ? 'Este Año' :
+    period === 'custom' ? 'Rango Personalizado' : 'Este Mes'
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -71,7 +106,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
               {isAlmacen
                 ? `Centro de Operaciones de Almacén • ${user?.first_name || 'Encargado'}`
                 : isVendedor
-                ? `Portal Comercial • ${user?.first_name || 'Vendedor'}`
+                ? `Portal Comercial • ${salespersonProfile?.name || user?.first_name || 'Vendedor'}`
                 : 'Panel de Control Ejecutivo Nexus ERP'}
             </h2>
             <span className="badge badge-success" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -80,7 +115,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
             </span>
           </div>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-            {activeBranch ? activeBranch.name : 'Todas las Sucursales'} • República Dominicana (RD$) {isAlmacen ? '• Monitoreo de Existencias, Lotes y Recepciones' : isVendedor ? '• Seguimiento de Metas y Clientes' : '• DGII NCF'}
+            {activeBranch ? activeBranch.name : 'Todas las Sucursales'} • Período: <strong style={{ color: 'var(--accent-primary)' }}>{currentPeriodLabel}</strong> • República Dominicana (RD$) {isAlmacen ? '• Monitoreo de Existencias, Lotes y Recepciones' : isVendedor ? '• Seguimiento de Metas y Clientes' : '• DGII NCF'}
           </p>
         </div>
 
@@ -95,14 +130,35 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
             ].map(p => (
               <button
                 key={p.id}
-                onClick={() => setPeriod(p.id)}
+                onClick={() => {
+                  setShowCustomDate(false);
+                  setPeriod(p.id);
+                }}
                 className={`btn btn-sm ${period === p.id ? 'btn-primary' : 'btn-secondary'}`}
                 style={{ borderRadius: '8px', fontSize: '0.75rem', padding: '5px 12px' }}
               >
                 {p.label}
               </button>
             ))}
+            <button
+              onClick={() => setShowCustomDate(!showCustomDate)}
+              className={`btn btn-sm ${period === 'custom' || showCustomDate ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ borderRadius: '8px', fontSize: '0.75rem', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              title="Filtrar por rango personalizado"
+            >
+              <Calendar size={13} />
+              <span>Rango</span>
+            </button>
           </div>
+
+          <button
+            onClick={handleRefresh}
+            className="btn btn-secondary btn-sm"
+            style={{ borderRadius: '8px', padding: '8px 10px' }}
+            title="Actualizar datos"
+          >
+            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+          </button>
 
           {isAlmacen ? (
             <button onClick={() => onNavigate('inventory')} className="btn btn-primary">
@@ -117,6 +173,71 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
           )}
         </div>
       </div>
+
+      {/* Custom Date Range Filter Dropdown / Bar */}
+      {showCustomDate && (
+        <form
+          onSubmit={handleApplyCustomDate}
+          style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--accent-primary)',
+            borderRadius: '12px',
+            padding: '14px 20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Calendar size={18} color="var(--accent-primary)" />
+            <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>Rango de Fechas Personalizado:</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Desde:</span>
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={(e) => setCustomStartDate(e.target.value)}
+                required
+                className="input input-sm"
+                style={{ padding: '4px 8px', fontSize: '0.82rem' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Hasta:</span>
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={(e) => setCustomEndDate(e.target.value)}
+                required
+                className="input input-sm"
+                style={{ padding: '4px 8px', fontSize: '0.82rem' }}
+              />
+            </div>
+
+            <button type="submit" className="btn btn-primary btn-sm" style={{ padding: '5px 14px' }}>
+              Aplicar Filtro
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowCustomDate(false);
+                if (period === 'custom') setPeriod('month');
+              }}
+              className="btn btn-secondary btn-sm"
+              style={{ padding: '5px 8px' }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </form>
+      )}
 
       {/* ALERT BANNERS (Filtered by role) */}
       {alerts && alerts.length > 0 && (
@@ -186,8 +307,8 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
           {isAlmacen
             ? 'Panel de Control Logístico & Almacén (8 Indicadores)'
             : isVendedor
-            ? 'Métricas de Desempeño Comercial'
-            : 'Indicadores Clave del Negocio (12 KPIs)'}
+            ? `Métricas de Desempeño Comercial (${currentPeriodLabel})`
+            : `Indicadores Clave del Negocio (${currentPeriodLabel})`}
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
           {isAlmacen ? (
@@ -199,7 +320,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   <div>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Existencia Total</span>
                     <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                      {Number(kpis.total_physical_units || 3420).toLocaleString('es-DO')} <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>UND</span>
+                      {Number(kpis.total_physical_units || 0).toLocaleString('es-DO')} <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>UND</span>
                     </h4>
                     <p style={{ fontSize: '0.72rem', color: '#60a5fa', marginTop: '4px' }}>
                       Unidades físicas en almacén
@@ -271,7 +392,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   <div>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Catálogo Total</span>
                     <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                      {kpis.products_count || 148} <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>SKUs</span>
+                      {kpis.products_count || 0} <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>SKUs</span>
                     </h4>
                     <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                       Referencias activas
@@ -289,7 +410,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   <div>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Lotes Registrados</span>
                     <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                      {kpis.lots_count || 42} <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>lotes</span>
+                      {kpis.lots_count || 0} <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>lotes</span>
                     </h4>
                     <p style={{ fontSize: '0.72rem', color: '#10b981', marginTop: '4px' }}>
                       Trazabilidad y vencimientos
@@ -307,7 +428,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   <div>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Recepciones de Compra</span>
                     <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: (kpis.pending_purchases_count || 0) > 0 ? '#38bdf8' : 'var(--text-primary)', marginTop: '4px' }}>
-                      {kpis.pending_purchases_count || 3} <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>órdenes</span>
+                      {kpis.pending_purchases_count || 0} <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>órdenes</span>
                     </h4>
                     <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                       Pendientes de recibir en muelle
@@ -358,16 +479,16 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                 </div>
               </div>
 
-              {/* KPI 2: Ventas del Mes */}
+              {/* KPI 2: Ventas del Período */}
               <div className="card" onClick={() => onNavigate('sales')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Ventas del Mes</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Ventas ({currentPeriodLabel})</span>
                     <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                      RD$ {Number(kpis.sales_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      RD$ {Number(kpis.sales_period || kpis.sales_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                     </h4>
                     <p style={{ fontSize: '0.72rem', color: 'var(--success)', marginTop: '4px' }}>
-                      {kpis.sales_month_count || 0} facturas totales
+                      {kpis.sales_period_count || kpis.sales_month_count || 0} facturas totales
                     </p>
                   </div>
                   <div style={{ padding: '8px', background: 'rgba(16, 185, 129, 0.15)', borderRadius: '10px' }}>
@@ -394,13 +515,13 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                 </div>
               </div>
 
-              {/* KPI 4: Cobrado Mes */}
+              {/* KPI 4: Cobrado en el Período */}
               <div className="card" onClick={() => onNavigate('collections')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cobrado Mes</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cobrado ({currentPeriodLabel})</span>
                     <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#38bdf8', marginTop: '4px' }}>
-                      RD$ {Number(kpis.collected_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      RD$ {Number(kpis.collected_period || kpis.collected_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                     </h4>
                     <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                       Efectividad de cobranza
@@ -421,10 +542,10 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                       <div>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Comisiones Estimadas</span>
                         <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--success)', marginTop: '4px' }}>
-                          RD$ {Number((kpis.sales_month || 0) * 0.05).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                          RD$ {Number((kpis.sales_period || kpis.sales_month || 0) * (sellerCommissionRate / 100)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                         </h4>
                         <p style={{ fontSize: '0.72rem', color: '#10b981', marginTop: '4px' }}>
-                          5.0% tasa estándar
+                          {sellerCommissionRate.toFixed(1)}% tasa asignada
                         </p>
                       </div>
                       <div style={{ padding: '8px', background: 'rgba(16, 185, 129, 0.15)', borderRadius: '10px' }}>
@@ -439,10 +560,10 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                       <div>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Meta Comercial Mes</span>
                         <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                          RD$ 350,000.00
+                          RD$ {Number(sellerGoal).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                         </h4>
                         <p style={{ fontSize: '0.72rem', color: '#60a5fa', marginTop: '4px' }}>
-                          {Math.min(100, Math.round(((kpis.sales_month || 0) / 350000) * 100))}% alcanzado
+                          {Math.min(100, Math.round(((kpis.sales_period || kpis.sales_month || 0) / (sellerGoal || 1)) * 100))}% alcanzado
                         </p>
                       </div>
                       <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.15)', borderRadius: '10px' }}>
@@ -459,7 +580,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                       <div>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cartera CxC Total</span>
                         <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#f59e0b', marginTop: '4px' }}>
-                          RD$ {Number(kpis.receivables_total || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                          RD$ {Number(kpis.receivables_total || kpis.total_pending_cxc || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                         </h4>
                         <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                           {kpis.receivables_count || 0} facturas por cobrar
@@ -476,8 +597,8 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Cartera Vencida</span>
-                        <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.receivables_overdue || 0) > 0 ? '#ef4444' : 'var(--text-primary)', marginTop: '4px' }}>
-                          RD$ {Number(kpis.receivables_overdue || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.receivables_overdue || kpis.overdue_cxc || 0) > 0 ? '#ef4444' : 'var(--text-primary)', marginTop: '4px' }}>
+                          RD$ {Number(kpis.receivables_overdue || kpis.overdue_cxc || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                         </h4>
                         <p style={{ fontSize: '0.72rem', color: 'var(--danger)', marginTop: '4px' }}>
                           {kpis.receivables_overdue_count || 0} facturas vencidas
@@ -492,7 +613,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   {/* KPI 7: Valoración Inventario */}
                   <div className="card" onClick={() => onNavigate('inventory')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div>
+                  <div>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Valor Inventario</span>
                         <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
                           RD$ {Number(kpis.inventory_valuation || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
@@ -507,13 +628,13 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                     </div>
                   </div>
 
-                  {/* KPI 8: Gastos del Mes */}
+                  {/* KPI 8: Gastos del Período */}
                   <div className="card" onClick={() => onNavigate('expenses')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Gastos Operativos</span>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Gastos ({currentPeriodLabel})</span>
                         <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#f59e0b', marginTop: '4px' }}>
-                          RD$ {Number(kpis.expenses_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                          RD$ {Number(kpis.expenses_period || kpis.expenses_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                         </h4>
                         <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                           Caja chica & fijos
@@ -530,8 +651,8 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Ganancia Neta Est.</span>
-                        <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.estimated_profit_month || 0) >= 0 ? 'var(--success)' : 'var(--danger)', marginTop: '4px' }}>
-                          RD$ {Number(kpis.estimated_profit_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: Number(kpis.estimated_profit_period || kpis.estimated_profit_month || 0) >= 0 ? 'var(--success)' : 'var(--danger)', marginTop: '4px' }}>
+                          RD$ {Number(kpis.estimated_profit_period || kpis.estimated_profit_month || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                         </h4>
                         <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                           Margen bruto menos gastos
@@ -572,7 +693,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                       {kpis.active_customers_count || 0}
                     </h4>
                     <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      Cartera georreferenciada
+                      {isVendedor ? 'Asignados a mi cartera' : 'Cartera georreferenciada'}
                     </p>
                   </div>
                   <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.15)', borderRadius: '10px' }}>
@@ -622,24 +743,28 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   {isAlmacen ? '1. Top Artículos en Demanda & Salida' : 'Top Productos Líderes'}
                 </h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  {isAlmacen ? 'Mayor volumen despachado en el período' : 'Artículos con mayor facturación'}
+                  {isAlmacen ? 'Mayor volumen despachado en el período' : `Artículos con mayor facturación (${currentPeriodLabel})`}
                 </p>
               </div>
               <Package size={18} color="#38bdf8" />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {charts.top_products?.map((prod, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
-                  <div>
-                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>{prod.product_name}</span>
-                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{prod.units_sold} unidades movidas</span>
+              {charts.top_products && charts.top_products.length > 0 ? (
+                charts.top_products.map((prod, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                    <div>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>{prod.product_name}</span>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{prod.units_sold} unidades movidas</span>
+                    </div>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#38bdf8' }}>
+                      RD$ {Number(prod.total_revenue).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </span>
                   </div>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#38bdf8' }}>
-                    RD$ {Number(prod.total_revenue).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              ))}
+                ))
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>Sin movimientos de productos en este período.</p>
+              )}
             </div>
           </div>
 
@@ -656,30 +781,36 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {charts.sales_by_category?.map((cat, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{cat.category_name}</span>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#ec4899' }}>
-                    RD$ {Number(cat.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              ))}
+              {charts.sales_by_category && charts.sales_by_category.length > 0 ? (
+                charts.sales_by_category.map((cat, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{cat.category_name}</span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#ec4899' }}>
+                      RD$ {Number(cat.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>Sin ventas por categoría registradas en este período.</p>
+              )}
             </div>
           </div>
 
-          {/* Chart: Facturación por Día del Mes (Only for Non-Almacen) */}
+          {/* Chart: Facturación por Día / Horas (Only for Non-Almacen) */}
           {!isAlmacen && (
             <div className="card" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
-                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Facturación por Día del Mes</h4>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Evolución diaria de ventas en RD$</p>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {period === 'today' ? 'Facturación por Horas del Día' : (period === 'year' ? 'Facturación por Meses del Año' : 'Facturación por Días del Período')}
+                  </h4>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Evolución temporal de ventas en RD$</p>
                 </div>
                 <BarChart3 size={18} color="#60a5fa" />
               </div>
 
               <div style={{ display: 'flex', alignItems: 'flex-end', height: '180px', gap: '8px', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
-                {charts.sales_by_day?.length > 0 ? (
+                {charts.sales_by_day && charts.sales_by_day.length > 0 ? (
                   charts.sales_by_day.map((d, idx) => {
                     const maxVal = Math.max(...charts.sales_by_day.map(x => Number(x.total)), 50000);
                     const h = Math.max(10, (Number(d.total) / maxVal) * 100);
@@ -696,12 +827,12 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                             borderRadius: '4px 4px 0 0'
                           }}
                         />
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>D{d.day}</span>
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{d.day}</span>
                       </div>
                     );
                   })
                 ) : (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 'auto' }}>Sin transacciones en este período.</p>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 'auto' }}>Sin transacciones registradas en este período.</p>
                 )}
               </div>
             </div>
@@ -712,7 +843,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
                 <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {isAlmacen ? '3. Principales Salones & Destinos de Despacho' : 'Top Clientes (Mayor Facturación)'}
+                  {isAlmacen ? '3. Principales Salones & Destinos de Despacho' : `Top Clientes (${currentPeriodLabel})`}
                 </h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Salones y centros de estética destacados</p>
               </div>
@@ -720,17 +851,21 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {charts.top_customers?.map((cust, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
-                  <div>
-                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>{cust.customer_name}</span>
-                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{cust.purchases_count} despachos procesados</span>
+              {charts.top_customers && charts.top_customers.length > 0 ? (
+                charts.top_customers.map((cust, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                    <div>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>{cust.customer_name}</span>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{cust.purchases_count} transacciones</span>
+                    </div>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--success)' }}>
+                      RD$ {Number(cust.total_purchased).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </span>
                   </div>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--success)' }}>
-                    RD$ {Number(cust.total_purchased).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              ))}
+                ))
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>Sin compras de clientes registradas en este período.</p>
+              )}
             </div>
           </div>
 
@@ -740,28 +875,32 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
                   <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>{isVendedor ? 'Tabla de Posiciones Comercial' : 'Ranking de Fuerza de Ventas'}</h4>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Desempeño mensual de vendedores</p>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Desempeño de ventas ({currentPeriodLabel})</p>
                 </div>
                 <Users size={18} color="#a78bfa" />
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {charts.sales_by_salesperson?.map((sp, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'var(--bg-subtle-2)', color: 'var(--text-primary)', fontSize: '0.7rem', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        #{idx + 1}
-                      </span>
-                      <div>
-                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>{sp.salesperson_name}</span>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'block' }}>{sp.invoice_count} facturas</span>
+                {charts.sales_by_salesperson && charts.sales_by_salesperson.length > 0 ? (
+                  charts.sales_by_salesperson.map((sp, idx) => (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'var(--bg-subtle-2)', color: 'var(--text-primary)', fontSize: '0.7rem', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          #{idx + 1}
+                        </span>
+                        <div>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>{sp.salesperson_name}</span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'block' }}>{sp.invoice_count} facturas</span>
+                        </div>
                       </div>
+                      <span style={{ fontSize: '0.88rem', fontWeight: 800, color: '#60a5fa' }}>
+                        RD$ {Number(sp.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </span>
                     </div>
-                    <span style={{ fontSize: '0.88rem', fontWeight: 800, color: '#60a5fa' }}>
-                      RD$ {Number(sp.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>Sin registros comerciales para este período.</p>
+                )}
               </div>
             </div>
           )}
@@ -771,7 +910,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
             <div className="card" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
-                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>3. Antigüedad de Saldos CxC (Semáforo)</h4>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Antigüedad de Saldos CxC (Semáforo)</h4>
                   <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Clasificación de riesgo de cartera por días vencidos</p>
                 </div>
                 <Clock size={18} color="#f59e0b" />
@@ -785,7 +924,18 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   { label: '91-120 Días', key: 'bracket_91_120', color: '#ea580c', desc: 'Crítico' },
                   { label: '+120 Días', key: 'bracket_120_plus', color: '#ef4444', desc: 'Legal' }
                 ].map(b => {
-                  const amount = charts.cxc_aging ? Number(charts.cxc_aging[b.key] || 0) : 0;
+                  let amount = 0;
+                  if (charts.cxc_aging) {
+                    if (charts.cxc_aging[b.key] !== undefined) {
+                      amount = Number(charts.cxc_aging[b.key]) || 0;
+                    } else if (Array.isArray(charts.cxc_aging.items)) {
+                      const item = charts.cxc_aging.items.find(it => it.key === b.key);
+                      amount = item ? Number(item.value) || 0 : 0;
+                    } else if (Array.isArray(charts.cxc_aging)) {
+                      const matchIdx = ['bracket_0_30', 'bracket_31_60', 'bracket_61_90', 'bracket_91_120', 'bracket_120_plus'].indexOf(b.key);
+                      amount = charts.cxc_aging[matchIdx]?.value || 0;
+                    }
+                  }
                   return (
                     <div key={b.key} style={{ padding: '12px 6px', background: 'var(--bg-card)', borderRadius: '10px', border: `1px solid ${b.color}40` }}>
                       <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: b.color, margin: '0 auto 6px', boxShadow: `0 0 8px ${b.color}` }} />
@@ -806,21 +956,25 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
             <div className="card" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
-                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>6. Gastos Operativos por Rubro</h4>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Distribución de costos fijos y variables</p>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Gastos Operativos por Rubro</h4>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Distribución de costos ({currentPeriodLabel})</p>
                 </div>
                 <Activity size={18} color="#f59e0b" />
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {charts.expenses_by_category?.map((exp, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{exp.name}</span>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#f59e0b' }}>
-                      RD$ {Number(exp.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                ))}
+                {charts.expenses_by_category && charts.expenses_by_category.length > 0 ? (
+                  charts.expenses_by_category.map((exp, idx) => (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{exp.name}</span>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#f59e0b' }}>
+                        RD$ {Number(exp.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>Sin gastos registrados en este período.</p>
+                )}
               </div>
             </div>
           )}

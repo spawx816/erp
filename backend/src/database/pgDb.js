@@ -28,6 +28,11 @@ function convertSqliteToPostgres(sql) {
   // IFNULL -> COALESCE
   converted = converted.replace(/IFNULL\s*\(/gi, 'COALESCE(');
 
+  // date('now', '-30 days') / date('now', '+X days')
+  converted = converted.replace(/date\s*\(\s*'now'\s*,\s*'-(\d+)\s*(days?|months?|years?)'\s*\)/gi, "(CURRENT_DATE - INTERVAL '$1 $2')");
+  converted = converted.replace(/date\s*\(\s*'now'\s*,\s*'\+(\d+)\s*(days?|months?|years?)'\s*\)/gi, "(CURRENT_DATE + INTERVAL '$1 $2')");
+  converted = converted.replace(/date\s*\(\s*'now'\s*,\s*'(-?\d+\s*[^']+)'\s*\)/gi, "(CURRENT_DATE + INTERVAL '$1')");
+
   // date('now') / datetime('now')
   converted = converted.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
   converted = converted.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'CURRENT_TIMESTAMP');
@@ -47,19 +52,33 @@ function convertSqliteToPostgres(sql) {
   // date(col) -> ((col)::date)
   converted = converted.replace(/date\s*\(\s*([^)]+)\)/gi, "($1)::date");
 
+  // INSERT OR IGNORE INTO -> INSERT INTO ... ON CONFLICT DO NOTHING
+  if (/INSERT\s+OR\s+IGNORE\s+INTO/i.test(converted)) {
+    converted = converted.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
+    if (!/ON\s+CONFLICT/i.test(converted)) {
+      converted = `${converted.trim()} ON CONFLICT DO NOTHING`;
+    }
+  }
+
   return converted;
 }
+
+const normalizeParams = (params) => {
+  const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+  return flat.map(p => (p === undefined ? null : p));
+};
 
 // Database query wrapper interface
 const db = {
   // Query returning all rows
   query: async (sql, params = []) => {
     const formattedSql = convertSqliteToPostgres(sql);
+    const flatParams = normalizeParams(params);
     try {
-      const res = await pool.query(formattedSql, params);
+      const res = await pool.query(formattedSql, flatParams);
       return res.rows;
     } catch (err) {
-      console.error('❌ Database query error:', err.message, '\nSQL:', formattedSql, '\nParams:', params);
+      console.error('❌ Database query error:', err.message, '\nSQL:', formattedSql, '\nParams:', flatParams);
       throw err;
     }
   },
@@ -68,7 +87,7 @@ const db = {
   prepare: (sql) => {
     return {
       all: async (...params) => {
-        const flatParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+        const flatParams = normalizeParams(params);
         const formattedSql = convertSqliteToPostgres(sql);
         try {
           const res = await pool.query(formattedSql, flatParams);
@@ -80,7 +99,7 @@ const db = {
       },
 
       get: async (...params) => {
-        const flatParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+        const flatParams = normalizeParams(params);
         const formattedSql = convertSqliteToPostgres(sql);
         try {
           const res = await pool.query(formattedSql, flatParams);
@@ -92,7 +111,7 @@ const db = {
       },
 
       run: async (...params) => {
-        let flatParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+        const flatParams = normalizeParams(params);
         let formattedSql = convertSqliteToPostgres(sql);
 
         // If INSERT and doesn't have RETURNING id, append RETURNING id

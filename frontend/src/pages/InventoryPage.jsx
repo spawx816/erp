@@ -11,6 +11,10 @@ import { useToast } from '../context/ToastContext';
 export default function InventoryPage({ initialTab = 'stock' }) {
   const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState(initialTab); // 'stock' | 'kardex' | 'lots' | 'analysis' | 'transfers'
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
   const [stockList, setStockList] = useState([]);
   const [kardexList, setKardexList] = useState([]);
   const [lotsList, setLotsList] = useState([]);
@@ -55,7 +59,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
     if (activeTab === 'lots') loadLots();
     if (activeTab === 'analysis') loadAnalysis();
     if (activeTab === 'transfers') loadTransfers();
-  }, [activeTab, selectedWarehouse, noMovementDays]);
+  }, [activeTab, selectedWarehouse, noMovementDays, search]);
 
   const loadMeta = async () => {
     try {
@@ -73,7 +77,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
   const loadStock = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/inventory/stock', { warehouse_id: selectedWarehouse });
+      const res = await api.get('/inventory/stock', { warehouse_id: selectedWarehouse, search });
       if (res.success) setStockList(res.data);
     } catch (err) {
       console.error(err);
@@ -85,7 +89,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
   const loadKardex = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/inventory/kardex', { warehouse_id: selectedWarehouse });
+      const res = await api.get('/inventory/kardex', { warehouse_id: selectedWarehouse, search });
       if (res.success) setKardexList(res.data);
     } catch (err) {
       console.error(err);
@@ -264,23 +268,37 @@ export default function InventoryPage({ initialTab = 'stock' }) {
           </button>
         </div>
 
-        {/* Warehouse Selector */}
-        {activeTab !== 'transfers' && activeTab !== 'analysis' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Almacén:</span>
-            <select
-              className="select-control"
-              value={selectedWarehouse}
-              onChange={(e) => setSelectedWarehouse(e.target.value)}
-              style={{ width: '200px', height: '36px', fontSize: '0.78rem' }}
-            >
-              <option value="">Todos los Almacenes</option>
-              {warehouses.map(w => (
-                <option key={w.id} value={w.id}>{w.name}</option>
-              ))}
-            </select>
+        {/* Warehouse & Search Filters */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', width: '220px' }}>
+            <Search size={14} style={{ position: 'absolute', left: '10px', top: '11px', color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              className="input-control"
+              placeholder="Buscar en inventario..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ paddingLeft: '30px', height: '36px', fontSize: '0.78rem' }}
+            />
           </div>
-        )}
+
+          {activeTab !== 'transfers' && activeTab !== 'analysis' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Almacén:</span>
+              <select
+                className="select-control"
+                value={selectedWarehouse}
+                onChange={(e) => setSelectedWarehouse(e.target.value)}
+                style={{ width: '200px', height: '36px', fontSize: '0.78rem' }}
+              >
+                <option value="">Todos los Almacenes</option>
+                {warehouses.map(w => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* TAB 1: STOCK EXISTENCIAS */}
@@ -310,7 +328,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
 
                   return (
                     <tr key={idx}>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{item.sku}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', fontWeight: 600 }}>{item.sku || item.product_sku}</td>
                       <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{item.product_name}</td>
                       <td>
                         {item.shade_number ? (
@@ -348,11 +366,11 @@ export default function InventoryPage({ initialTab = 'stock' }) {
               <tr>
                 <th>Fecha / Hora</th>
                 <th>Almacén</th>
-                <th>Producto</th>
+                <th>Producto / SKU</th>
                 <th>Tipo Movimiento</th>
                 <th>Cantidad</th>
-                <th>Saldo Resultante</th>
-                <th>Motivo / Referencia</th>
+                <th>Stock Resultante</th>
+                <th>Usuario / Referencia</th>
               </tr>
             </thead>
             <tbody>
@@ -367,7 +385,10 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                     <tr key={k.id}>
                       <td style={{ fontSize: '0.78rem' }}>{new Date(k.created_at).toLocaleString('es-DO')}</td>
                       <td>{k.warehouse_name}</td>
-                      <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{k.product_name}</td>
+                      <td>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{k.product_name}</div>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{k.sku || k.product_sku}</span>
+                      </td>
                       <td>
                         <span className={`badge ${isPositive ? 'badge-success' : 'badge-warning'}`} style={{ textTransform: 'capitalize' }}>
                           {k.movement_type.replace('_', ' ')}
@@ -376,8 +397,11 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                       <td style={{ fontWeight: 800, color: isPositive ? 'var(--success)' : 'var(--danger)' }}>
                         {isPositive ? `+${k.quantity}` : k.quantity}
                       </td>
-                      <td style={{ fontWeight: 700, color: '#38bdf8' }}>{k.balance_after}</td>
-                      <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{k.reason || '-'}</td>
+                      <td style={{ fontWeight: 800, color: '#38bdf8' }}>{k.new_quantity}</td>
+                      <td style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                        <div>{k.user_name || k.username || 'Sistema'}</div>
+                        {k.reason && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{k.reason}</span>}
+                      </td>
                     </tr>
                   );
                 })
@@ -492,7 +516,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
             <div className="card" style={{ padding: '16px', textAlign: 'center' }}>
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Valoración Total Inventario</span>
               <p style={{ fontSize: '1.4rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '4px' }}>
-                RD$ {Number(analysisData.totals?.total_valuation || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                RD$ {Number(analysisData.kpis?.total_valuation || analysisData.totals?.total_valuation || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
               </p>
             </div>
 
@@ -551,8 +575,8 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                       <td>{p.brand_name || p.line || '-'}</td>
                       <td style={{ fontWeight: 700 }}>{p.current_stock} und.</td>
                       <td style={{ fontWeight: 700, color: '#38bdf8' }}>{p.units_sold_30d || 0} und.</td>
-                      <td style={{ color: p.days_since_sale > 60 ? 'var(--danger)' : 'inherit' }}>
-                        {p.days_since_sale === 999 ? 'Sin ventas' : `${p.days_since_sale} días`}
+                      <td style={{ color: (p.days_since_last_sale ?? 999) > 60 ? 'var(--danger)' : 'inherit' }}>
+                        {p.days_since_last_sale === null || p.days_since_last_sale === undefined ? 'Sin ventas' : `${p.days_since_last_sale} días`}
                       </td>
                       <td style={{ fontWeight: 800, color: 'var(--text-primary)' }}>
                         RD$ {(Number(p.cost) * Number(p.current_stock)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}

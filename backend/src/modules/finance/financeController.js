@@ -27,7 +27,7 @@ const financeController = {
                COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                c.phone as customer_phone, c.tax_id as customer_tax_id,
                b.name as branch_name,
-               CAST((julianday('now') - julianday(ar.due_date)) AS INTEGER) as days_overdue
+               COALESCE((CURRENT_DATE - ar.due_date), 0) as days_overdue
         FROM accounts_receivable ar
         JOIN customers c ON ar.customer_id = c.id
         JOIN branches b ON ar.branch_id = b.id
@@ -69,107 +69,6 @@ const financeController = {
     }
   },
 
-  // CxC AGING TABLE (SEMÁFORO 0-120+ CON AGRUPACIÓN POR CLIENTE)
-  getCxCAgingTable: async (req, res) => {
-    try {
-      const companyId = req.user.company_id;
-      const receivables = await db.prepare(`
-        SELECT ar.*,
-               COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
-               c.code as customer_code,
-               c.phone as customer_phone,
-               COALESCE(sp.name, 'Vendedor Principal') as salesperson_name,
-               CAST((julianday('now') - julianday(ar.due_date)) AS INTEGER) as days_overdue
-        FROM accounts_receivable ar
-        JOIN customers c ON ar.customer_id = c.id
-        LEFT JOIN sales s ON ar.sale_id = s.id
-        LEFT JOIN salespeople sp ON s.salesperson_id = sp.id
-        WHERE ar.company_id = ? AND ar.status != 'paid' AND ar.balance > 0
-        ORDER BY ar.customer_id ASC, ar.due_date ASC
-      `).all(companyId);
-
-      const customerMap = {};
-      let grandTotal = 0;
-      let tot_0_30 = 0;
-      let tot_31_60 = 0;
-      let tot_61_90 = 0;
-      let tot_91_120 = 0;
-      let tot_over_120 = 0;
-
-      receivables.forEach(r => {
-        const bal = Number(r.balance) || 0;
-        const days = Math.max(0, Number(r.days_overdue) || 0);
-
-        if (!customerMap[r.customer_id]) {
-          customerMap[r.customer_id] = {
-            customer_id: r.customer_id,
-            customer_name: r.customer_name,
-            code: r.customer_code || `CLI-${r.customer_id}`,
-            salesperson_name: r.salesperson_name,
-            days_0_30: 0,
-            days_31_60: 0,
-            days_61_90: 0,
-            days_91_120: 0,
-            days_over_120: 0,
-            total: 0,
-            invoices: []
-          };
-        }
-
-        const cust = customerMap[r.customer_id];
-        cust.total += bal;
-        grandTotal += bal;
-
-        if (days <= 30) {
-          cust.days_0_30 += bal;
-          tot_0_30 += bal;
-        } else if (days <= 60) {
-          cust.days_31_60 += bal;
-          tot_31_60 += bal;
-        } else if (days <= 90) {
-          cust.days_61_90 += bal;
-          tot_61_90 += bal;
-        } else if (days <= 120) {
-          cust.days_91_120 += bal;
-          tot_91_120 += bal;
-        } else {
-          cust.days_over_120 += bal;
-          tot_over_120 += bal;
-        }
-
-        cust.invoices.push({
-          id: r.id,
-          sale_id: r.sale_id,
-          invoice_number: r.invoice_number || `FAC-${r.sale_id}`,
-          ncf: r.ncf,
-          issue_date: r.issue_date,
-          due_date: r.due_date,
-          amount: Number(r.amount),
-          balance: bal,
-          days_overdue: days
-        });
-      });
-
-      const customers = Object.values(customerMap);
-
-      return res.json({
-        success: true,
-        data: {
-          totals: {
-            grand_total: grandTotal,
-            days_0_30: tot_0_30,
-            days_31_60: tot_31_60,
-            days_61_90: tot_61_90,
-            days_91_120: tot_91_120,
-            days_over_120: tot_over_120
-          },
-          customers
-        }
-      });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: 'Error generando matriz de antigüedad de saldos.', error: err.message });
-    }
-  },
   receivePayment: async (req, res) => {
     try {
       const companyId = req.user.company_id;
@@ -210,14 +109,14 @@ const financeController = {
 
       const paymentId = await runTransaction(async () => {
         // 1. Insert Payment
-        const stmtPay = await db.prepare(`
+        const stmtPay = db.prepare(`
           INSERT INTO receivable_payments (
             company_id, branch_id, customer_id, cash_session_id, user_id,
             payment_number, payment_date, total_amount, payment_method, reference_number, notes
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        const resPay = stmtPay.run(
+        const resPay = await stmtPay.run(
           companyId, branchId, customer_id, activeSession ? activeSession.id : null, userId,
           paymentNumber, paymentDate, total_amount, payment_method, reference_number || null, notes || null
         );
@@ -244,7 +143,7 @@ const financeController = {
           }
         }
 
-        const stmtAlloc = await db.prepare(`
+        const stmtAlloc = db.prepare(`
           INSERT INTO payment_allocations (payment_id, receivable_id, amount_applied)
           VALUES (?, ?, ?)
         `);
@@ -253,7 +152,7 @@ const financeController = {
           const applied = Number(alloc.amount_applied);
           if (applied <= 0) continue;
 
-          stmtAlloc.run(pId, alloc.receivable_id, applied);
+          await stmtAlloc.run(pId, alloc.receivable_id, applied);
 
           // Update receivable balance
           const ar = await db.prepare('SELECT balance FROM accounts_receivable WHERE id = ?').get(alloc.receivable_id);
@@ -322,7 +221,7 @@ const financeController = {
         SELECT ap.*,
                s.company_name as supplier_name, s.phone as supplier_phone, s.tax_id as supplier_tax_id,
                b.name as branch_name,
-               CAST((julianday('now') - julianday(ap.due_date)) AS INTEGER) as days_overdue
+               COALESCE((CURRENT_DATE - ap.due_date), 0) as days_overdue
         FROM accounts_payable ap
         JOIN suppliers s ON ap.supplier_id = s.id
         JOIN branches b ON ap.branch_id = b.id
@@ -516,7 +415,7 @@ const financeController = {
                sp.name as salesperson_name,
                sp.code as salesperson_code,
                ar.id as receivable_id, ar.invoice_number, ar.ncf, ar.issue_date, ar.due_date, ar.amount, ar.balance,
-               CAST((julianday('now') - julianday(ar.due_date)) AS INTEGER) as days_overdue
+               COALESCE((CURRENT_DATE - ar.due_date), 0) as days_overdue
         FROM accounts_receivable ar
         JOIN customers c ON ar.customer_id = c.id
         LEFT JOIN salespeople sp ON c.salesperson_id = sp.id
@@ -600,6 +499,7 @@ const financeController = {
       return res.json({
         success: true,
         data: {
+          customers: rows,
           rows,
           totals
         }

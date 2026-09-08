@@ -11,6 +11,10 @@ import { useToast } from '../context/ToastContext';
 export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
   const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState(initialTab); // 'cxc' | 'aging' | 'cxp' | 'expenses'
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
   const [receivables, setReceivables] = useState([]);
   const [agingData, setAgingData] = useState(null);
   const [payables, setPayables] = useState([]);
@@ -81,14 +85,21 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
     }
   };
 
-  const handleOpenMultiPay = async (customer) => {
+  const handleOpenMultiPay = async (customer = null) => {
     setSelectedCustomerForPay(customer);
     setPaymentTotalAmount('');
     setAllocations({});
+    setCustomerInvoices([]);
     setShowMultiPayModal(true);
 
+    if (customer && customer.id) {
+      loadCustomerInvoices(customer.id);
+    }
+  };
+
+  const loadCustomerInvoices = async (customerId) => {
     try {
-      const res = await api.get(`/third-parties/customers/${customer.id}/360`);
+      const res = await api.get(`/third-parties/customers/${customerId}/360`);
       if (res.success) {
         const openRecs = res.data.receivables?.filter(r => r.status !== 'paid' && Number(r.balance) > 0) || [];
         setCustomerInvoices(openRecs);
@@ -243,9 +254,7 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
 
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
-            onClick={() => {
-              if (customers.length > 0) handleOpenMultiPay(customers[0]);
-            }}
+            onClick={() => handleOpenMultiPay(null)}
             className="btn btn-primary"
             style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
           >
@@ -425,14 +434,14 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                       Cargando matriz de antigüedad de saldos...
                     </td>
                   </tr>
-                ) : !agingData?.customers || agingData.customers.length === 0 ? (
+                ) : (!agingData?.customers?.length && !agingData?.rows?.length) ? (
                   <tr>
                     <td colSpan="9" style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)' }}>
                       No hay clientes con saldos o cuentas por cobrar pendientes.
                     </td>
                   </tr>
                 ) : (
-                  agingData.customers.map(c => (
+                  (agingData?.customers || agingData?.rows || []).map(c => (
                     <tr key={c.customer_id}>
                       <td>
                         <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.customer_name}</div>
@@ -566,7 +575,7 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
       )}
 
       {/* MULTI-INVOICE PAYMENT MODAL (SECTION #13) */}
-      {showMultiPayModal && selectedCustomerForPay && (
+      {showMultiPayModal && (
         <div className="modal-overlay" onClick={() => setShowMultiPayModal(false)}>
           <div className="modal-content modal-content-xl" style={{ padding: '24px' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', marginBottom: '16px' }}>
@@ -575,7 +584,11 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                   Cobro & Distribución Multi-Factura
                 </h3>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  Cliente: <strong style={{ color: 'var(--text-primary)' }}>{selectedCustomerForPay.company_name || `${selectedCustomerForPay.first_name} ${selectedCustomerForPay.last_name}`}</strong>
+                  {selectedCustomerForPay ? (
+                    <>Cliente seleccionado: <strong style={{ color: '#10b981' }}>{selectedCustomerForPay.company_name || `${selectedCustomerForPay.first_name} ${selectedCustomerForPay.last_name}`}</strong></>
+                  ) : (
+                    'Selecciona un cliente para cargar y distribuir pagos entre sus facturas pendientes.'
+                  )}
                 </p>
               </div>
               <button onClick={() => setShowMultiPayModal(false)} className="btn btn-secondary btn-sm">
@@ -584,6 +597,46 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
             </div>
 
             <form onSubmit={handleSubmitMultiPay} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Customer Selector */}
+              <div style={{ background: 'var(--bg-subtle-2)', padding: '14px 16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                <label className="label-control" style={{ fontWeight: 700, marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Seleccionar Cliente a Cobrar *</span>
+                  {selectedCustomerForPay && (
+                    <span style={{ color: '#38bdf8' }}>
+                      Balance Pendiente: RD$ {Number(selectedCustomerForPay.current_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </span>
+                  )}
+                </label>
+                <select
+                  className="select-control"
+                  value={selectedCustomerForPay ? selectedCustomerForPay.id : ''}
+                  onChange={(e) => {
+                    const custId = e.target.value;
+                    const cust = customers.find(c => String(c.id) === String(custId));
+                    setSelectedCustomerForPay(cust || null);
+                    setAllocations({});
+                    if (cust) {
+                      loadCustomerInvoices(cust.id);
+                    } else {
+                      setCustomerInvoices([]);
+                    }
+                  }}
+                  style={{ height: '42px', fontWeight: 600 }}
+                  required
+                >
+                  <option value="">-- Selecciona un Cliente con Deuda --</option>
+                  {customers.map(c => {
+                    const name = c.company_name || `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.identification_number;
+                    const bal = Number(c.current_balance || 0);
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {name} ({c.identification_number || 'S/N'}) {bal > 0 ? `— Deuda: RD$ ${bal.toFixed(2)}` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
               {/* Payment Info Header */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', background: 'var(--bg-subtle)', padding: '16px', borderRadius: '12px' }}>
                 <div>
@@ -630,6 +683,7 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                 <div style={{ display: 'flex', alignItems: 'flex-end' }}>
                   <button
                     type="button"
+                    disabled={!selectedCustomerForPay || customerInvoices.length === 0}
                     onClick={handleAutoDistributeFIFO}
                     className="btn btn-secondary"
                     style={{ height: '42px', width: '100%', justifyContent: 'center' }}
@@ -658,7 +712,9 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {customerInvoices.length === 0 ? (
+                      {!selectedCustomerForPay ? (
+                        <tr><td colSpan="6" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>Selecciona un cliente arriba para ver sus facturas pendientes.</td></tr>
+                      ) : customerInvoices.length === 0 ? (
                         <tr><td colSpan="6" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>El cliente no tiene facturas pendientes de cobro.</td></tr>
                       ) : (
                         customerInvoices.map(inv => (
@@ -695,7 +751,7 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingPayment || customerInvoices.length === 0}
+                  disabled={submittingPayment || !selectedCustomerForPay || customerInvoices.length === 0}
                   className="btn btn-primary"
                   style={{ background: 'linear-gradient(135deg, #10b981, #059669)', padding: '8px 24px' }}
                 >

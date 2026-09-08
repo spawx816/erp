@@ -45,8 +45,8 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       roles: ['admin', 'gerente', 'cajero', 'vendedor'],
       items: [
         { id: 'pos', label: 'Facturación (POS)', icon: ShoppingCart, highlight: true },
-        { id: 'sales', label: 'Facturas', icon: Receipt },
-        { id: 'credit-notes', label: 'Notas de Crédito', icon: RotateCcw }
+        { id: 'sales', label: 'Historial de Facturas', icon: Receipt },
+        { id: 'credit-notes', label: 'Notas de Crédito (NCF B04)', icon: RotateCcw }
       ]
     },
     {
@@ -55,21 +55,19 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       icon: Users,
       roles: ['admin', 'gerente', 'cajero', 'vendedor', 'cobros'],
       items: [
-        { id: 'customers', label: 'Clientes', icon: Users },
-        { id: 'customer-statement', label: 'Estado de Cuenta', icon: FileText },
-        { id: 'credit-risk', label: 'Crédito y Riesgo', icon: ShieldAlert, roles: ['admin', 'gerente', 'cobros'] }
+        { id: 'customers', label: 'Directorio de Clientes', icon: Users },
+        { id: 'customer-statement', label: 'Estados de Cuenta', icon: FileText },
+        { id: 'credit-risk', label: 'Límites & Riesgo', icon: ShieldAlert, roles: ['admin', 'gerente', 'cobros'] }
       ]
     },
     {
       id: 'cobros',
-      label: 'COBROS',
+      label: 'COBROS & CxC',
       icon: HandCoins,
       roles: ['admin', 'gerente', 'cajero', 'cobros', 'vendedor'],
       items: [
-        { id: 'collections', label: 'Registrar Cobro', icon: HandCoins },
-        { id: 'collection-history', label: 'Historial', icon: History },
-        { id: 'collection-promises', label: 'Compromisos', icon: CalendarClock, roles: ['admin', 'gerente', 'cobros'] },
-        { id: 'cxc-dashboard', label: 'Cuentas por Cobrar', icon: DollarSign, roles: ['admin', 'gerente', 'cobros'] }
+        { id: 'collections', label: 'Cuentas por Cobrar & Cobros', icon: HandCoins },
+        { id: 'aging', label: 'Antigüedad de Saldos (0-120+)', icon: CalendarClock, roles: ['admin', 'gerente', 'cobros'] }
       ]
     },
     {
@@ -78,51 +76,52 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       icon: Warehouse,
       items: [
         { id: 'products', label: 'Catálogo de Productos', icon: Package },
-        { id: 'dye-matrix', label: 'Tintes / Matriz', icon: Grid3X3, highlight: true },
+        { id: 'dye-matrix', label: 'Matriz de Tintes', icon: Grid3X3, highlight: true },
         { id: 'inventory', label: 'Existencias & Kardex', icon: Warehouse, roles: ['admin', 'gerente', 'almacen'] },
-        { id: 'inventory-lots', label: 'Lotes de Inventario', icon: Layers, roles: ['admin', 'gerente', 'almacen'] },
-        { id: 'inventory-analysis', label: 'Análisis de Rotación', icon: Activity, roles: ['admin', 'gerente', 'almacen'] }
+        { id: 'inventory-lots', label: 'Lotes & Vencimientos', icon: Layers, roles: ['admin', 'gerente', 'almacen'] },
+        { id: 'inventory-analysis', label: 'Rotación & Análisis ABC', icon: Activity, roles: ['admin', 'gerente', 'almacen'] }
       ]
     },
     {
       id: 'compras',
-      label: user?.role_slug === 'almacen' ? 'RECEPCIONES & COMPRAS' : 'COMPRAS',
+      label: user?.role_slug === 'almacen' ? 'RECEPCIONES & COMPRAS' : 'COMPRAS & CxP',
       icon: ShoppingBag,
       roles: ['admin', 'gerente', 'almacen'],
       items: [
         { id: 'suppliers', label: 'Proveedores', icon: Truck },
-        { id: 'purchases', label: user?.role_slug === 'almacen' ? 'Recepción de Mercancía' : 'Compras', icon: ShoppingBag },
-        { id: 'cxp-dashboard', label: 'Cuentas por Pagar', icon: CreditCard, roles: ['admin', 'gerente'] }
+        { id: 'purchases', label: user?.role_slug === 'almacen' ? 'Recepción de Mercancía' : 'Compras / Órdenes', icon: ShoppingBag },
+        { id: 'cxp-dashboard', label: 'Cuentas por Pagar (CxP)', icon: CreditCard, roles: ['admin', 'gerente'] }
       ]
     },
     {
       id: 'gastos',
-      label: 'GASTOS',
+      label: 'CONTROL DE GASTOS',
       icon: ReceiptText,
       roles: ['admin', 'gerente', 'cajero'],
       items: [
-        { id: 'expenses', label: 'Gastos', icon: ReceiptText, roles: ['admin', 'gerente'] },
-        { id: 'cash-register', label: 'Caja Chica', icon: Wallet },
-        { id: 'fixed-expenses', label: 'Pagos Fijos', icon: CalendarDays, roles: ['admin', 'gerente'] }
+        { id: 'expenses', label: 'Gastos Operativos', icon: ReceiptText, roles: ['admin', 'gerente'] },
+        { id: 'cash-register', label: 'Caja Chica & Cuadres', icon: Wallet },
+        { id: 'fixed-expenses', label: 'Gastos Fijos / Recurrentes', icon: CalendarDays, roles: ['admin', 'gerente'] }
       ]
     },
     {
       id: 'vendedores',
-      label: user?.role_slug === 'vendedor' ? 'MIS COMISIONES' : 'VENDEDORES',
+      label: user?.role_slug === 'vendedor' ? 'MIS COMISIONES' : 'FUERZA DE VENTAS',
       icon: UserCheck,
       roles: ['admin', 'gerente', 'vendedor'],
       items: [
-        { id: 'salespeople', label: 'Fuerza de Ventas', icon: UserCheck, roles: ['admin', 'gerente'] },
-        { id: 'commissions', label: user?.role_slug === 'vendedor' ? 'Mis Comisiones' : 'Comisiones', icon: Percent }
+        { id: 'salespeople', label: 'Vendedores & Metas', icon: UserCheck, roles: ['admin', 'gerente'] },
+        { id: 'commissions', label: user?.role_slug === 'vendedor' ? 'Mis Comisiones' : 'Liquidación Comisiones', icon: Percent }
       ]
     },
     {
       id: 'reportes',
-      label: 'REPORTES',
+      label: 'REPORTES & FISCAL',
       icon: FileSpreadsheet,
       roles: ['admin', 'gerente'],
       items: [
         { id: 'reports', label: 'Reportes Gerenciales', icon: FileSpreadsheet },
+        { id: 'fiscal', label: 'Comprobantes Fiscales (NCF)', icon: FileText },
         { id: 'monthly-closing', label: 'Cierre Mensual', icon: Calculator, highlight: true }
       ]
     },
@@ -132,10 +131,11 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       icon: Settings,
       roles: ['admin', 'gerente'],
       items: [
-        { id: 'users', label: 'Usuarios & Roles', icon: KeyRound },
-        { id: 'authorizations', label: 'Autorizaciones', icon: ShieldCheck },
+        { id: 'users', label: 'Usuarios', icon: KeyRound },
+        { id: 'authorizations', label: 'Roles & Permisos', icon: ShieldCheck },
         { id: 'audit-logs', label: 'Auditoría', icon: FileClock },
-        { id: 'settings', label: 'Configuración', icon: Settings }
+        { id: 'imports', label: 'Importación Masiva Excel', icon: Layers },
+        { id: 'settings', label: 'Configuración General', icon: Settings }
       ]
     }
   ];

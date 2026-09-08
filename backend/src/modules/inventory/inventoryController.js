@@ -30,13 +30,15 @@ const inventoryController = {
 
       let query = `
         SELECT inv.*,
-               p.name as product_name, p.sku as product_sku, p.cost, p.price, p.stock_min, p.stock_max, p.tax_rate,
+               p.name as product_name, p.sku as product_sku, p.sku, p.cost, p.price, p.stock_min, p.stock_max, p.tax_rate, p.shade_number, p.line,
                pv.variant_name, pv.sku as variant_sku,
                w.name as warehouse_name,
                br.name as branch_name,
-               c.name as category_name
+               c.name as category_name,
+               u.code as unit_code
         FROM inventories inv
         JOIN products p ON inv.product_id = p.id
+        LEFT JOIN units u ON p.unit_id = u.id
         LEFT JOIN product_variants pv ON inv.variant_id = pv.id
         JOIN warehouses w ON inv.warehouse_id = w.id
         JOIN branches br ON inv.branch_id = br.id
@@ -62,7 +64,7 @@ const inventoryController = {
   getKardex: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const { product_id, warehouse_id, movement_type, start_date, end_date, page = 1, limit = 50 } = req.query;
+      const { product_id, warehouse_id, movement_type, start_date, end_date, search, page = 1, limit = 50 } = req.query;
       const offset = (page - 1) * limit;
 
       let whereClauses = ['m.company_id = ?'];
@@ -88,13 +90,19 @@ const inventoryController = {
         whereClauses.push('date(m.created_at) <= ?');
         params.push(end_date);
       }
+      if (search) {
+        whereClauses.push('(p.name LIKE ? OR p.sku LIKE ? OR m.reason LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+
+      const whereSQL = whereClauses.join(' AND ');
 
       const countRow = await db.prepare(`SELECT COUNT(*) as total FROM inventory_movements m WHERE ${whereSQL}`).get(...params);
       const count = countRow ? parseInt(countRow.total, 10) || 0 : 0;
 
       const movements = await db.prepare(`
         SELECT m.*,
-               p.name as product_name, p.sku as product_sku,
+               p.name as product_name, p.sku as product_sku, p.sku, p.shade_number,
                pv.variant_name,
                w.name as warehouse_name,
                w_to.name as to_warehouse_name,
@@ -144,20 +152,20 @@ const inventoryController = {
       const movType = adjustment_type === 'out' ? 'adjustment_out' : 'adjustment_in';
 
       const result = await runTransaction(async () => {
-        const mov = InventoryService.recordMovement({
+        const mov = await InventoryService.recordMovement({
           companyId,
           branchId: warehouse.branch_id,
           warehouseId: warehouse_id,
-          productId,
-          variantId,
+          productId: product_id,
+          variantId: variant_id || null,
           userId: req.user.id,
           movementType: movType,
           quantity: qty,
-          unitCost: unitCost || 0,
+          unitCost: unit_cost || 0,
           reason
         });
 
-        logAudit({
+        await logAudit({
           companyId,
           userId: req.user.id,
           ipAddress: req.ip,
@@ -196,16 +204,16 @@ const inventoryController = {
         ORDER BY t.created_at DESC
       `).all(companyId);
 
-      const getItems = await db.prepare(`
+      const getItems = db.prepare(`
         SELECT ti.*, p.name as product_name, p.sku
         FROM inventory_transfer_items ti
         JOIN products p ON ti.product_id = p.id
         WHERE ti.transfer_id = ?
       `);
 
-      transfers.forEach(tr => {
-        tr.items = getItems.all(tr.id);
-      });
+      for (const tr of transfers) {
+        tr.items = await getItems.all(tr.id);
+      }
 
       return res.json({ success: true, data: transfers });
     } catch (err) {
@@ -234,32 +242,32 @@ const inventoryController = {
       const transferId = await runTransaction(async () => {
         // Validate stock for all items
         for (const item of items) {
-          const currentStock = InventoryService.getCurrentStock(from_warehouse_id, item.product_id, item.variant_id);
+          const currentStock = await InventoryService.getCurrentStock(from_warehouse_id, item.product_id, item.variant_id);
           if (currentStock < Number(item.quantity)) {
             throw new Error(`Stock insuficiente para el producto ID ${item.product_id}. Disponible: ${currentStock}, Solicitado: ${item.quantity}`);
           }
         }
 
-        const stmtTr = await db.prepare(`
+        const stmtTr = db.prepare(`
           INSERT INTO inventory_transfers (
             company_id, from_branch_id, from_warehouse_id, to_branch_id, to_warehouse_id,
             user_id, transfer_number, status, notes
           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'sent', ?)
         `);
 
-        const resTr = stmtTr.run(companyId, wFrom.branch_id, from_warehouse_id, wTo.branch_id, to_warehouse_id, req.user.id, transferNumber, notes || null);
+        const resTr = await stmtTr.run(companyId, wFrom.branch_id, from_warehouse_id, wTo.branch_id, to_warehouse_id, req.user.id, transferNumber, notes || null);
         const trId = resTr.lastInsertRowid;
 
-        const stmtItem = await db.prepare(`
+        const stmtItem = db.prepare(`
           INSERT INTO inventory_transfer_items (transfer_id, product_id, variant_id, quantity, unit_cost)
           VALUES (?, ?, ?, ?, ?)
         `);
 
         for (const item of items) {
-          stmtItem.run(trId, item.product_id, item.variant_id || null, item.quantity, item.unit_cost || 0);
+          await stmtItem.run(trId, item.product_id, item.variant_id || null, item.quantity, item.unit_cost || 0);
 
           // Deduct from source warehouse immediately
-          InventoryService.recordMovement({
+          await InventoryService.recordMovement({
             companyId,
             branchId: wFrom.branch_id,
             warehouseId: from_warehouse_id,
@@ -276,7 +284,7 @@ const inventoryController = {
           });
         }
 
-        logAudit({
+        await logAudit({
           companyId,
           userId: req.user.id,
           ipAddress: req.ip,
@@ -316,13 +324,13 @@ const inventoryController = {
         const items = await db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id = ?').all(id);
 
         for (const item of items) {
-          InventoryService.recordMovement({
+          await InventoryService.recordMovement({
             companyId,
             branchId: transfer.to_branch_id,
             warehouseId: transfer.to_warehouse_id,
             toWarehouseId: null,
             productId: item.product_id,
-            variantId: item.variant_id,
+            variantId: item.variant_id || null,
             userId: req.user.id,
             movementType: 'transfer_in',
             quantity: Math.abs(Number(item.quantity)),
@@ -339,7 +347,7 @@ const inventoryController = {
           WHERE id = ?
         `).run(id);
 
-        logAudit({
+        await logAudit({
           companyId,
           userId: req.user.id,
           ipAddress: req.ip,
@@ -360,21 +368,25 @@ const inventoryController = {
   getLots: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const { product_id, warehouse_id } = req.query;
+      const { product_id, warehouse_id, search } = req.query;
 
       let where = ['l.company_id = ?'];
       let params = [companyId];
 
       if (product_id) { where.push('l.product_id = ?'); params.push(product_id); }
       if (warehouse_id) { where.push('l.warehouse_id = ?'); params.push(warehouse_id); }
+      if (search) {
+        where.push('(p.name LIKE ? OR p.sku LIKE ? OR l.lot_number LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
 
       const lots = await db.prepare(`
         SELECT l.*,
                p.name as product_name, p.sku, p.shade_number, p.line,
                w.name as warehouse_name,
                s.company_name as supplier_name,
-               CAST((julianday('now') - julianday(l.entry_date)) AS INTEGER) as days_in_inventory,
-               CAST((julianday(l.expiration_date) - julianday('now')) AS INTEGER) as days_to_expiration
+               COALESCE((CURRENT_DATE - l.entry_date), 0) as days_in_inventory,
+               CASE WHEN l.expiration_date IS NOT NULL THEN (l.expiration_date - CURRENT_DATE) ELSE NULL END as days_to_expiration
         FROM inventory_lots l
         JOIN products p ON l.product_id = p.id
         JOIN warehouses w ON l.warehouse_id = w.id
@@ -425,7 +437,7 @@ const inventoryController = {
         SELECT p.id, p.name, p.sku, p.shade_number, p.line, p.cost, p.price,
                c.name as category_name, b.name as brand_name,
                COALESCE(SUM(inv.quantity), 0) as current_stock,
-               (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE si.product_id = p.id AND s.status != 'cancelled' AND s.created_at >= date('now', '-30 days')) as units_sold_30d,
+               (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE si.product_id = p.id AND s.status != 'cancelled' AND s.created_at >= (CURRENT_DATE - INTERVAL '30 days')) as units_sold_30d,
                (SELECT MAX(s.created_at) FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE si.product_id = p.id AND s.status != 'cancelled') as last_sale_date
         FROM products p
         LEFT JOIN inventories inv ON inv.product_id = p.id

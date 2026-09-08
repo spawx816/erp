@@ -119,7 +119,7 @@ const purchasesController = {
         });
 
         // 1. Insert purchase
-        const stmtPurch = await db.prepare(`
+        const stmtPurch = db.prepare(`
           INSERT INTO purchases (
             company_id, branch_id, warehouse_id, supplier_id, user_id,
             purchase_number, supplier_invoice_number, payment_terms, payment_status,
@@ -128,7 +128,7 @@ const purchasesController = {
         `);
 
         const paymentStatus = payment_terms === 'credit' ? 'pending' : 'paid';
-        const resPurch = stmtPurch.run(
+        const resPurch = await stmtPurch.run(
           companyId, warehouse.branch_id, warehouse_id, supplier_id, req.user.id,
           purchaseNumber, supplier_invoice_number || null, payment_terms, paymentStatus,
           subtotal, taxAmount, total, notes || null
@@ -136,7 +136,7 @@ const purchasesController = {
         const pId = resPurch.lastInsertRowid;
 
         // 2. Insert items and update inventory & kardex
-        const stmtItem = await db.prepare(`
+        const stmtItem = db.prepare(`
           INSERT INTO purchase_items (
             purchase_id, product_id, variant_id, quantity, unit_cost, subtotal, tax_rate, tax_amount, total
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -147,13 +147,13 @@ const purchasesController = {
           const itemTax = itemSub * (Number(item.tax_rate || 18) / 100);
           const itemTot = itemSub + itemTax;
 
-          stmtItem.run(
+          await stmtItem.run(
             pId, item.product_id, item.variant_id || null, item.quantity, item.unit_cost,
             itemSub, item.tax_rate || 18, itemTax, itemTot
           );
 
           // Update stock and Kardex
-          InventoryService.recordMovement({
+          await InventoryService.recordMovement({
             companyId,
             branchId: warehouse.branch_id,
             warehouseId,

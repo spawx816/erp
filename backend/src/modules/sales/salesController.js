@@ -135,7 +135,8 @@ const salesController = {
         supervisor_auth, // { username, password } if discount exceeds user limit
         notes = '',
         items = [],
-        payments = []
+        payments = [],
+        is_pos = true
       } = req.body;
 
       if (!customer_id || !warehouse_id || items.length === 0 || payments.length === 0) {
@@ -149,7 +150,7 @@ const salesController = {
       const discPercent = Number(discount_percent || 0);
       let authorizedByUserId = userId;
 
-      if (discPercent > Number(req.user.max_discount_percentage)) {
+      if (discPercent > Number(req.user.max_discount_percentage || 15)) {
         if (!supervisor_auth || !supervisor_auth.username || !supervisor_auth.password) {
           return res.status(403).json({
             success: false,
@@ -180,36 +181,36 @@ const salesController = {
         authorizedByUserId = supervisor.id;
       }
 
-      // Check if cash session is required for any cash payment
+      // STRICT CASH SESSION CHECK:
+      // For POS operations and any cash transactions, an open cash session is strictly required.
       const hasCashPayment = payments.some(p => p.payment_method === 'cash');
       let activeSession = null;
-      if (hasCashPayment) {
-        activeSession = await db.prepare(`
-          SELECT id FROM cash_sessions
-          WHERE user_id = ? AND branch_id = ? AND status = 'open'
-        `).get(userId, branchId);
+
+      if (hasCashPayment || is_pos) {
+        const explicitSessionId = req.body.cash_session_id;
+
+        if (explicitSessionId) {
+          activeSession = await db.prepare(`
+            SELECT id, cash_register_id, branch_id FROM cash_sessions
+            WHERE id = ? AND branch_id = ? AND status = 'open'
+          `).get(explicitSessionId, branchId);
+        }
 
         if (!activeSession) {
-          // Look for any open register session in the target branch or any active session
-          const branchSession = await db.prepare(`
-            SELECT id FROM cash_sessions
-            WHERE (branch_id = ? OR branch_id IS NULL) AND status = 'open'
-            ORDER BY id DESC
-          `).get(branchId);
+          // Check for an open session assigned directly to this user in this branch
+          activeSession = await db.prepare(`
+            SELECT id, cash_register_id, branch_id FROM cash_sessions
+            WHERE user_id = ? AND branch_id = ? AND status = 'open'
+          `).get(userId, branchId);
+        }
 
-          if (branchSession) {
-            activeSession = branchSession;
-          } else {
-            const anySession = await db.prepare(`SELECT id FROM cash_sessions WHERE status = 'open' ORDER BY id DESC`).get();
-            if (anySession) {
-              activeSession = anySession;
-            } else {
-              return res.status(400).json({
-                success: false,
-                message: 'No hay una sesión de caja abierta en esta sucursal para registrar pagos en efectivo. Por favor, abre un turno de caja primero o utiliza Tarjeta/Transferencia/Crédito.'
-              });
-            }
-          }
+        // If no active session found for this user/branch, strictly block the sale
+        if (!activeSession) {
+          return res.status(400).json({
+            success: false,
+            requires_cash_open: true,
+            message: 'No tienes un turno de caja abierto en esta sucursal. Debe aperturar caja antes de facturar en el Punto de Venta (POS).'
+          });
         }
       }
 
@@ -228,7 +229,7 @@ const salesController = {
           if (!prod) throw new Error(`Producto ID ${item.product_id} no encontrado.`);
 
           if (prod.type === 'physical') {
-            const currentStock = InventoryService.getCurrentStock(warehouse_id, item.product_id, item.variant_id || null);
+            const currentStock = await InventoryService.getCurrentStock(warehouse_id, item.product_id, item.variant_id || null);
             if (currentStock < Number(item.quantity)) {
               const comp = await db.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
               if (!comp || comp.allow_negative_inventory === 0) {
@@ -307,8 +308,21 @@ const salesController = {
         const balanceAmount = Math.max(0, total - totalPaid);
         const initialStatus = balanceAmount === 0 ? 'paid' : (totalPaid > 0 ? 'partial' : 'pending');
 
+        if (hasCreditPayment) {
+          if (!cust) {
+            throw new Error('Cliente no válido para venta a crédito.');
+          }
+          if (cust.is_credit_blocked === 1 && !supervisor_auth?.username) {
+            throw new Error('El cliente tiene el crédito bloqueado por administración.');
+          }
+          const availableCredit = Number(cust.credit_limit || 0) - Number(cust.current_balance || 0);
+          if (creditAmount > availableCredit && Number(cust.credit_limit || 0) > 0 && !supervisor_auth?.username) {
+            throw new Error(`El monto a crédito (RD$ ${creditAmount.toFixed(2)}) supera el crédito disponible (RD$ ${Math.max(0, availableCredit).toFixed(2)}). Requiere autorización de supervisor.`);
+          }
+        }
+
         // 4. Obtain Dominican NCF atomically
-        const fiscalInfo = FiscalService.getNextNCF(companyId, branchId, fiscal_type_code);
+        const fiscalInfo = await FiscalService.getNextNCF(companyId, branchId, fiscal_type_code);
         const saleNumber = `VTA-${Date.now().toString().slice(-6)}`;
         const invoiceNumber = `FAC-${Date.now().toString().slice(-6)}`;
 
@@ -322,7 +336,7 @@ const salesController = {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        const resSale = stmtSale.run(
+        const resSale = await stmtSale.run(
           companyId, branchId, warehouse_id, activeSession ? activeSession.id : null, customer_id, salespersonId, userId,
           saleNumber, invoiceNumber, fiscalInfo.ncf, fiscal_type_code, saleType,
           subtotal, totalDiscount, totalTax, total, totalPaid, balanceAmount, changeGiven,
@@ -345,14 +359,14 @@ const salesController = {
         `);
 
         for (const item of preparedItems) {
-          stmtItem.run(
+          await stmtItem.run(
             saleId, item.product_id, item.variant_id, item.product_name, item.quantity,
             item.unit_cost, item.unit_price, item.discount_percent, item.discount_amount,
             item.subtotal, item.tax_rate, item.tax_amount, item.total
           );
 
           if (item.product_type === 'physical') {
-            InventoryService.recordMovement({
+            await InventoryService.recordMovement({
               companyId,
               branchId,
               warehouseId: warehouse_id,
@@ -416,8 +430,8 @@ const salesController = {
           `).run(companyId, salespersonId, saleId, invoiceNumber, subtotal, rate, commAmt);
         }
 
-        // 8. If authorized discount was used, log it
-        if (discPercent > Number(req.user.max_discount_percentage)) {
+        // 10. If authorized discount was used, log it
+        if (discPercent > Number(req.user.max_discount_percentage || 15)) {
           await db.prepare(`
             INSERT INTO discount_authorizations (
               company_id, sale_id, requested_by_user_id, authorized_by_user_id,
@@ -426,7 +440,7 @@ const salesController = {
           `).run(companyId, saleId, userId, authorizedByUserId, discPercent, totalDiscount, notes || 'Descuento especial autorizado en POS');
         }
 
-        // 9. Audit Log
+        // 11. Audit Log
         logAudit({
           companyId,
           userId,
@@ -439,10 +453,12 @@ const salesController = {
         });
 
         return {
+          id: saleId,
           sale_id: saleId,
           sale_number: saleNumber,
           invoice_number: invoiceNumber,
           ncf: fiscalInfo.ncf,
+          status: initialStatus,
           subtotal,
           total_discount: totalDiscount,
           tax_amount: totalTax,
@@ -488,7 +504,7 @@ const salesController = {
 
       await runTransaction(async () => {
         // 1. Get NCF B04 for credit note
-        const b04 = FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
+        const b04 = await FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
         const creditNoteNumber = `NC-${Date.now().toString().slice(-6)}`;
 
         // 2. Insert credit note record
@@ -499,13 +515,13 @@ const salesController = {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'total', ?, ?, ?, ?, ?)
         `);
 
-        const resNC = stmtNC.run(
+        const resNC = await stmtNC.run(
           companyId, sale.branch_id, sale.warehouse_id, sale.customer_id, req.user.id, sale.id,
           b04.ncf, creditNoteNumber, reason, sale.subtotal, sale.tax_amount, sale.total, action_taken
         );
         const ncId = resNC.lastInsertRowid;
 
-        // 3. Insert sale items into credit_note_items (FIX: was missing)
+        // 3. Insert sale items into credit_note_items
         const items = await db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
         const stmtNCI = await db.prepare(`
           INSERT INTO credit_note_items (
@@ -515,7 +531,7 @@ const salesController = {
         `);
 
         for (const item of items) {
-          stmtNCI.run(
+          await stmtNCI.run(
             ncId,
             item.product_id,
             item.variant_id || null,
@@ -530,7 +546,7 @@ const salesController = {
           // Return to stock (Kardex)
           const prod = await db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
           if (prod && prod.type === 'physical') {
-            InventoryService.recordMovement({
+            await InventoryService.recordMovement({
               companyId,
               branchId: sale.branch_id,
               warehouseId: sale.warehouse_id,
@@ -554,7 +570,7 @@ const salesController = {
           WHERE sale_id = ?
         `).run(sale.id);
 
-        // 5. If store_credit, update customer credit_notes_balance (FIX: was never updated)
+        // 5. If store_credit, update customer credit_notes_balance
         if (action_taken === 'store_credit') {
           await db.prepare(`
             UPDATE customers
@@ -633,7 +649,7 @@ const salesController = {
           total += itemSubtotal + itemTax;
         }
 
-        const b04 = FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
+        const b04 = await FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
         const creditNoteNumber = `NC-${Date.now().toString().slice(-6)}`;
 
         const resNC = await db.prepare(`
@@ -660,11 +676,11 @@ const salesController = {
           const taxRate = Number(item.tax_rate || 0);
           const iSub = qty * price;
           const iTax = iSub * (taxRate / 100);
-          stmtItem.run(ncId, item.product_id, item.variant_id || null, qty, price, iSub, taxRate, iTax, iSub + iTax);
+          await stmtItem.run(ncId, item.product_id, item.variant_id || null, qty, price, iSub, taxRate, iTax, iSub + iTax);
 
           const prod = await db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
           if (prod && prod.type === 'physical') {
-            InventoryService.recordMovement({
+            await InventoryService.recordMovement({
               companyId,
               branchId: sale.branch_id,
               warehouseId: sale.warehouse_id,
@@ -765,7 +781,7 @@ const salesController = {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent')
         `);
 
-        const resQ = stmtQ.run(
+        const resQ = await stmtQ.run(
           companyId, branchId, warehouse_id, customer_id, userId,
           quoteNumber, validUntilStr, subtotal, taxAmount, total, notes || null
         );
@@ -777,11 +793,11 @@ const salesController = {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        items.forEach(it => {
+        for (const it of items) {
           const lSub = Number(it.quantity) * Number(it.unit_price);
           const lTax = lSub * (Number(it.tax_rate || 18) / 100);
-          stmtItem.run(id, it.product_id, it.variant_id || null, it.quantity, it.unit_price, lSub, it.tax_rate || 18, lTax, lSub + lTax);
-        });
+          await stmtItem.run(id, it.product_id, it.variant_id || null, it.quantity, it.unit_price, lSub, it.tax_rate || 18, lTax, lSub + lTax);
+        }
 
         return id;
       });

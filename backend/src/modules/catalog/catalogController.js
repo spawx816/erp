@@ -65,10 +65,10 @@ const catalogController = {
       `).all(...params, limit, offset);
 
       // Attach variants to products
-      const getVariants = await db.prepare(`SELECT * FROM product_variants WHERE product_id = ?`);
-      products.forEach(prod => {
-        prod.variants = getVariants.all(prod.id);
-      });
+      const getVariants = db.prepare(`SELECT * FROM product_variants WHERE product_id = ?`);
+      for (const prod of products) {
+        prod.variants = await getVariants.all(prod.id);
+      }
 
       return res.json({
         success: true,
@@ -152,7 +152,6 @@ const catalogController = {
       `).get(barcode, barcode, barcode, companyId);
 
       if (product) {
-        product.variants = await db.prepare('SELECT * FROM product_variants WHERE product_id = ?').all(product.id);
         return res.json({
           success: true,
           type: 'product',
@@ -162,7 +161,7 @@ const catalogController = {
 
       return res.status(404).json({ success: false, message: 'Producto no encontrado con el código escaneado.' });
     } catch (err) {
-      return res.status(500).json({ success: false, message: 'Error buscando código de barras.', error: err.message });
+      return res.status(500).json({ success: false, message: 'Error en búsqueda por código de barras.', error: err.message });
     }
   },
 
@@ -170,11 +169,12 @@ const catalogController = {
     try {
       const companyId = req.user.company_id;
       const {
-        name, sku, barcode, internal_code, category_id, brand_id, unit_id,
-        description, type = 'physical', cost = 0, price = 0, min_price = 0,
-        tax_rate = 18.00, stock_min = 5, stock_max = 500,
-        allows_discount = 1, max_discount_percent = 15,
-        variants = [], initial_warehouse_id, initial_stock = 0
+        category_id, brand_id, unit_id, internal_code, sku, barcode,
+        name, description, type = 'physical', cost = 0, price = 0, min_price = 0,
+        tax_rate = 18.00, stock_min = 0, stock_max = 0,
+        allows_discount = true, max_discount_percent = 0,
+        initial_warehouse_id, initial_stock = 0,
+        variants = []
       } = req.body;
 
       if (!name || !sku) {
@@ -187,7 +187,7 @@ const catalogController = {
       }
 
       const newProduct = await runTransaction(async () => {
-        const stmt = await db.prepare(`
+        const stmt = db.prepare(`
           INSERT INTO products (
             company_id, category_id, brand_id, unit_id, internal_code, sku, barcode,
             name, description, type, cost, price, min_price, tax_rate,
@@ -206,13 +206,13 @@ const catalogController = {
 
         // Insert variants if supplied
         if (variants && variants.length > 0) {
-          const stmtVar = await db.prepare(`
+          const stmtVar = db.prepare(`
             INSERT INTO product_variants (product_id, variant_name, sku, barcode, cost, price)
             VALUES (?, ?, ?, ?, ?, ?)
           `);
-          variants.forEach(v => {
-            stmtVar.run(productId, v.variant_name, v.sku, v.barcode || null, v.cost || cost, v.price || price);
-          });
+          for (const v of variants) {
+            await stmtVar.run(productId, v.variant_name, v.sku, v.barcode || null, v.cost || cost, v.price || price);
+          }
         }
 
         // If initial stock provided
