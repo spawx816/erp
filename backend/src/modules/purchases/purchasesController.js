@@ -96,11 +96,14 @@ const purchasesController = {
         payment_terms = 'cash', credit_days = 30, notes, items
       } = req.body;
 
-      if (!supplier_id || !warehouse_id || !items || items.length === 0) {
+      const parsedSupplierId = parseInt(supplier_id, 10);
+      const parsedWarehouseId = parseInt(warehouse_id, 10);
+
+      if (!parsedSupplierId || !parsedWarehouseId || !items || items.length === 0) {
         return res.status(400).json({ success: false, message: 'Proveedor, almacén y al menos un ítem son obligatorios.' });
       }
 
-      const warehouse = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(warehouse_id, companyId);
+      const warehouse = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(parsedWarehouseId, companyId);
       if (!warehouse) return res.status(404).json({ success: false, message: 'Almacén no válido.' });
 
       const purchaseNumber = `COM-${Date.now().toString().slice(-6)}`;
@@ -111,8 +114,8 @@ const purchasesController = {
         let total = 0;
 
         items.forEach(item => {
-          const itemSubtotal = Number(item.quantity) * Number(item.unit_cost);
-          const itemTax = itemSubtotal * (Number(item.tax_rate || 18) / 100);
+          const itemSubtotal = parseFloat(item.quantity || 1) * parseFloat(item.unit_cost || 0);
+          const itemTax = itemSubtotal * (parseFloat(item.tax_rate || 18) / 100);
           subtotal += itemSubtotal;
           taxAmount += itemTax;
           total += itemSubtotal + itemTax;
@@ -129,7 +132,7 @@ const purchasesController = {
 
         const paymentStatus = payment_terms === 'credit' ? 'pending' : 'paid';
         const resPurch = await stmtPurch.run(
-          companyId, warehouse.branch_id, warehouse_id, supplier_id, req.user.id,
+          companyId, warehouse.branch_id, parsedWarehouseId, parsedSupplierId, req.user.id,
           purchaseNumber, supplier_invoice_number || null, payment_terms, paymentStatus,
           subtotal, taxAmount, total, notes || null
         );
@@ -143,35 +146,42 @@ const purchasesController = {
         `);
 
         for (const item of items) {
-          const itemSub = Number(item.quantity) * Number(item.unit_cost);
-          const itemTax = itemSub * (Number(item.tax_rate || 18) / 100);
+          const pIdItem = parseInt(item.product_id, 10);
+          if (!pIdItem) continue;
+
+          const itemQty = Math.abs(parseFloat(item.quantity || 1));
+          const itemCost = parseFloat(item.unit_cost || 0);
+          const itemTaxRate = parseFloat(item.tax_rate || 18);
+          const itemSub = itemQty * itemCost;
+          const itemTax = itemSub * (itemTaxRate / 100);
           const itemTot = itemSub + itemTax;
+          const variantId = item.variant_id ? parseInt(item.variant_id, 10) : null;
 
           await stmtItem.run(
-            pId, item.product_id, item.variant_id || null, item.quantity, item.unit_cost,
-            itemSub, item.tax_rate || 18, itemTax, itemTot
+            pId, pIdItem, variantId, itemQty, itemCost,
+            itemSub, itemTaxRate, itemTax, itemTot
           );
 
           // Update stock and Kardex
           await InventoryService.recordMovement({
             companyId,
             branchId: warehouse.branch_id,
-            warehouseId,
-            productId: item.product_id,
-            variantId: item.variant_id || null,
+            warehouseId: parsedWarehouseId,
+            productId: pIdItem,
+            variantId: variantId,
             userId: req.user.id,
             movementType: 'purchase',
-            quantity: Math.abs(Number(item.quantity)),
-            unitCost: item.unit_cost,
+            quantity: itemQty,
+            unitCost: itemCost,
             referenceType: 'purchases',
             referenceId: pId,
             reason: `Compra de mercancía ${purchaseNumber} (Factura Prov: ${supplier_invoice_number || 'N/A'})`
           });
 
           // Update product cost to latest purchase cost
-          await db.prepare('UPDATE products SET cost = ? WHERE id = ?').run(item.unit_cost, item.product_id);
-          if (item.variant_id) {
-            await db.prepare('UPDATE product_variants SET cost = ? WHERE id = ?').run(item.unit_cost, item.variant_id);
+          await db.prepare('UPDATE products SET cost = ? WHERE id = ?').run(itemCost, pIdItem);
+          if (variantId) {
+            await db.prepare('UPDATE product_variants SET cost = ? WHERE id = ?').run(itemCost, variantId);
           }
         }
 
