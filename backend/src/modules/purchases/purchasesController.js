@@ -108,7 +108,7 @@ const purchasesController = {
 
       const purchaseNumber = `COM-${Date.now().toString().slice(-6)}`;
 
-      const purchaseId = await runTransaction(async () => {
+      const purchaseId = await runTransaction(async (txDb) => {
         let subtotal = 0;
         let taxAmount = 0;
         let total = 0;
@@ -122,7 +122,7 @@ const purchasesController = {
         });
 
         // 1. Insert purchase
-        const stmtPurch = db.prepare(`
+        const stmtPurch = txDb.prepare(`
           INSERT INTO purchases (
             company_id, branch_id, warehouse_id, supplier_id, user_id,
             purchase_number, supplier_invoice_number, payment_terms, payment_status,
@@ -139,7 +139,7 @@ const purchasesController = {
         const pId = resPurch.lastInsertRowid;
 
         // 2. Insert items and update inventory & kardex
-        const stmtItem = db.prepare(`
+        const stmtItem = txDb.prepare(`
           INSERT INTO purchase_items (
             purchase_id, product_id, variant_id, quantity, unit_cost, subtotal, tax_rate, tax_amount, total
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -162,7 +162,7 @@ const purchasesController = {
             itemSub, itemTaxRate, itemTax, itemTot
           );
 
-          // Update stock and Kardex
+          // Update stock and Kardex (uses global db — InventoryService reads current stock & writes)
           await InventoryService.recordMovement({
             companyId,
             branchId: warehouse.branch_id,
@@ -179,9 +179,9 @@ const purchasesController = {
           });
 
           // Update product cost to latest purchase cost
-          await db.prepare('UPDATE products SET cost = ? WHERE id = ?').run(itemCost, pIdItem);
+          await txDb.prepare('UPDATE products SET cost = ? WHERE id = ?').run(itemCost, pIdItem);
           if (variantId) {
-            await db.prepare('UPDATE product_variants SET cost = ? WHERE id = ?').run(itemCost, variantId);
+            await txDb.prepare('UPDATE product_variants SET cost = ? WHERE id = ?').run(itemCost, variantId);
           }
         }
 
@@ -192,29 +192,30 @@ const purchasesController = {
           const dueDateStr = dueDate.toISOString().split('T')[0];
           const issueDateStr = new Date().toISOString().split('T')[0];
 
-          await db.prepare(`
+          await txDb.prepare(`
             INSERT INTO accounts_payable (
               company_id, branch_id, supplier_id, purchase_id, document_number,
               issue_date, due_date, amount, balance, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-          `).run(companyId, warehouse.branch_id, supplier_id, pId, supplier_invoice_number || purchaseNumber, issueDateStr, dueDateStr, total, total);
+          `).run(companyId, warehouse.branch_id, parsedSupplierId, pId, supplier_invoice_number || purchaseNumber, issueDateStr, dueDateStr, total, total);
 
           // Update supplier balance
-          await db.prepare('UPDATE suppliers SET current_balance = current_balance + ? WHERE id = ?').run(total, supplier_id);
+          await txDb.prepare('UPDATE suppliers SET current_balance = current_balance + ? WHERE id = ?').run(total, parsedSupplierId);
         }
 
-        logAudit({
-          companyId,
-          userId: req.user.id,
-          ipAddress: req.ip,
-          module: 'purchases',
-          action: 'create_purchase',
-          recordId: pId,
-          newValues: { purchase_number: purchaseNumber, total, payment_terms },
-          description: `Compra registrada ${purchaseNumber} por monto total RD$ ${total.toFixed(2)}`
-        });
-
         return pId;
+      });
+
+      // Audit log after successful commit
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip,
+        module: 'purchases',
+        action: 'create_purchase',
+        recordId: purchaseId,
+        newValues: { purchase_number: purchaseNumber, payment_terms },
+        description: `Compra registrada ${purchaseNumber}`
       });
 
       return res.status(201).json({ success: true, message: 'Compra registrada exitosamente.', purchase_id: purchaseId });

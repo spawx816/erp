@@ -771,5 +771,3 @@ const thirdPartiesController = {
 };
 
 module.exports = thirdPartiesController;
-
-module.exports = thirdPartiesController;
