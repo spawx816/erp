@@ -1089,7 +1089,16 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                       <div style={{ fontSize: '0.8rem' }}>{s.phone}</div>
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{s.email}</span>
                     </td>
-                    <td>{s.total_purchases || 0}</td>
+                    <td>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: Number(s.purchase_count) > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                        {Number(s.purchase_count) || 0}
+                      </div>
+                      {Number(s.total_purchased) > 0 && (
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                          RD$ {Number(s.total_purchased).toLocaleString('es-DO', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </span>
+                      )}
+                    </td>
                     <td style={{ fontWeight: 800, color: Number(s.pending_balance) > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>
                       RD$ {Number(s.pending_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                     </td>

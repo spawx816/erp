@@ -648,7 +648,9 @@ const thirdPartiesController = {
         SELECT s.*,
                (SELECT COALESCE(SUM(ap.balance), 0) FROM accounts_payable ap WHERE ap.supplier_id = s.id AND ap.status != 'paid') as pending_balance,
                (SELECT COUNT(*) FROM accounts_payable ap WHERE ap.supplier_id = s.id AND ap.status = 'overdue') as overdue_invoices_count,
-               (SELECT MAX(p.created_at) FROM purchases p WHERE p.supplier_id = s.id) as last_purchase_date
+               (SELECT MAX(p.created_at) FROM purchases p WHERE p.supplier_id = s.id) as last_purchase_date,
+               (SELECT COUNT(*) FROM purchases p WHERE p.supplier_id = s.id AND p.company_id = s.company_id) as purchase_count,
+               (SELECT COALESCE(SUM(p.total), 0) FROM purchases p WHERE p.supplier_id = s.id AND p.company_id = s.company_id) as total_purchased
         FROM suppliers s
         WHERE s.company_id = ?
         ORDER BY s.company_name ASC
