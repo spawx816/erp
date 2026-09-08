@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  ShoppingBag, Plus, Search, Calendar, DollarSign, X,
-  CheckCircle2, AlertCircle, Warehouse, Truck, FileText,
-  Clock, Filter, ArrowUpRight
+  ShoppingBag, Plus, Search, X, RefreshCw,
+  CheckCircle2, Warehouse, Truck, Package
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
@@ -14,8 +13,10 @@ export default function PurchasesPage({ activeBranch }) {
   const [products, setProducts] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [lastRefresh, setLastRefresh] = useState(null);
 
   // New Purchase Modal
   const [showModal, setShowModal] = useState(false);
@@ -49,17 +50,27 @@ export default function PurchasesPage({ activeBranch }) {
     }
   };
 
-  const loadPurchases = async () => {
-    setLoading(true);
+  const loadPurchases = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
     try {
       const res = await api.get('/purchases');
-      if (res.success) setPurchases(res.data || []);
+      if (res.success) {
+        setPurchases(res.data || []);
+        setLastRefresh(new Date());
+      } else {
+        addToast('No se pudieron cargar las compras.', 'error');
+      }
     } catch (err) {
       console.error(err);
+      addToast('Error conectando al servidor: ' + (err.message || ''), 'error');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [addToast]);
+
+  const handleRefresh = () => loadPurchases(true);
 
   const handleOpenModal = () => {
     const defaultSup = suppliers[0]?.id ? String(suppliers[0].id) : '';
@@ -161,9 +172,11 @@ export default function PurchasesPage({ activeBranch }) {
 
       const res = await api.post('/purchases', payload);
       if (res.success) {
-        addToast(`Compra registrada exitosamente. ${formData.payment_terms === 'credit' ? 'Se generó CxP a proveedor.' : ''}`, 'success');
+        addToast(`Compra registrada exitosamente.${formData.payment_terms === 'credit' ? ' Se generó CxP a proveedor.' : ''}`, 'success');
         setShowModal(false);
-        loadPurchases();
+        await loadPurchases(true); // await + silent refresh so loading spinner doesn't flash
+      } else {
+        addToast(res.message || 'Error registrando compra.', 'error');
       }
     } catch (err) {
       addToast(err.message || 'Error registrando compra.', 'error');
@@ -188,10 +201,13 @@ export default function PurchasesPage({ activeBranch }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <ShoppingBag size={24} className="text-blue-500" />
+            <ShoppingBag size={24} style={{ color: '#60a5fa' }} />
             Compras & Recepción de Mercancía
           </h2>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Ingreso y costeo de inventario con generación automática de CxP</p>
+          <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            {purchases.length} registro(s) &nbsp;·&nbsp;
+            {lastRefresh ? `Actualizado ${lastRefresh.toLocaleTimeString('es-DO')}` : 'Cargando...'}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <div style={{ position: 'relative' }}>
@@ -200,11 +216,19 @@ export default function PurchasesPage({ activeBranch }) {
               type="text"
               placeholder="Buscar compra, factura..."
               className="input-control"
-              style={{ paddingLeft: '36px', minWidth: '240px' }}
+              style={{ paddingLeft: '36px', minWidth: '220px' }}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="btn btn-secondary"
+            title="Actualizar lista"
+          >
+            <RefreshCw size={16} style={{ animation: refreshing ? 'spin 0.8s linear infinite' : 'none' }} />
+          </button>
           <button
             onClick={handleOpenModal}
             className="btn btn-primary"
