@@ -14,7 +14,7 @@ const authController = {
 
       let user = await db.prepare(`
         SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email,
-               u.password_hash, u.max_discount_percentage, u.status,
+               u.password_hash, u.max_discount_percentage, u.status, u.token_version,
                COALESCE(r.name, 'Super Administrador') as role_name, COALESCE(r.slug, 'admin') as role_slug,
                COALESCE(c.name, 'Nexus Distribuciones SRL') as company_name, COALESCE(c.currency, 'DOP') as currency, COALESCE(c.currency_symbol, 'RD$') as currency_symbol, COALESCE(c.tax_id, '131-99887-1') as company_tax_id, c.allow_negative_inventory
         FROM users u
@@ -37,7 +37,7 @@ const authController = {
             // Re-fetch newly created user
             user = await db.prepare(`
               SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email,
-                     u.password_hash, u.max_discount_percentage, u.status,
+                     u.password_hash, u.max_discount_percentage, u.status, u.token_version,
                      COALESCE(r.name, 'Super Administrador') as role_name, COALESCE(r.slug, 'admin') as role_slug,
                      COALESCE(c.name, 'Nexus Distribuciones SRL') as company_name, COALESCE(c.currency, 'DOP') as currency, COALESCE(c.currency_symbol, 'RD$') as currency_symbol, COALESCE(c.tax_id, '131-99887-1') as company_tax_id, c.allow_negative_inventory
               FROM users u
@@ -99,8 +99,9 @@ const authController = {
       // If user branch_id not set or not in branches, pick the first
       const activeBranchId = user.branch_id || (branches.length > 0 ? branches[0].id : null);
 
+      const userTokenVer = user.token_version !== undefined && user.token_version !== null ? Number(user.token_version) : 1;
       const token = jwt.sign(
-        { userId: user.id, companyId: user.company_id, roleId: user.role_id, tokenVersion: user.token_version || 1 },
+        { userId: user.id, companyId: user.company_id, roleId: user.role_id, tokenVersion: userTokenVer },
         JWT_SECRET,
         { expiresIn: '12h' }
       );

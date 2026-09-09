@@ -35,7 +35,10 @@ async function authenticateToken(req, res, next) {
     }
 
     // Check token version to enforce revocation on logout or password change
-    if (decoded.tokenVersion !== undefined && user.token_version !== undefined && decoded.tokenVersion !== user.token_version) {
+    const userTokenVer = user.token_version !== undefined && user.token_version !== null ? Number(user.token_version) : 1;
+    const decodedTokenVer = decoded.tokenVersion !== undefined && decoded.tokenVersion !== null ? Number(decoded.tokenVersion) : 1;
+
+    if (decodedTokenVer !== userTokenVer) {
       return res.status(401).json({ success: false, message: 'La sesión ha expirado o fue revocada. Inicie sesión nuevamente.' });
     }
 
