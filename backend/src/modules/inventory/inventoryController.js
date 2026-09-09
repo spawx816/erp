@@ -428,8 +428,8 @@ const inventoryController = {
           FROM products p
           LEFT JOIN inventories inv ON inv.product_id = p.id
           WHERE p.company_id = ?
-          GROUP BY p.id
-        )
+          GROUP BY p.id, p.stock_min
+        ) sub
       `).get(companyId);
 
       // Product sales in last 30 days
@@ -444,7 +444,7 @@ const inventoryController = {
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN brands b ON p.brand_id = b.id
         WHERE p.company_id = ?
-        GROUP BY p.id
+        GROUP BY p.id, p.name, p.sku, p.shade_number, p.line, p.cost, p.price, c.name, b.name
         ORDER BY units_sold_30d DESC
       `).all(companyId);
 
