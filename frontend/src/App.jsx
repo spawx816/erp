@@ -132,7 +132,7 @@ export default function App() {
           <main style={{ flex: 1, overflowY: 'auto', padding: '24px', background: 'var(--bg-app)' }}>
             <Suspense fallback={<PageLoader />}>
               {/* Dashboard & POS */}
-              {currentTab === 'dashboard' && <DashboardPage user={user} activeBranch={activeBranch} />}
+              {currentTab === 'dashboard' && <DashboardPage user={user} activeBranch={activeBranch} onNavigate={setCurrentTab} />}
               {currentTab === 'pos' && (
                 <POSPage
                   user={user}
@@ -143,7 +143,7 @@ export default function App() {
               )}
 
               {/* Ventas & Historial */}
-              {currentTab === 'sales-history' && (
+              {(currentTab === 'sales' || currentTab === 'sales-history') && (
                 <SalesHistoryPage user={user} activeBranch={activeBranch} />
               )}
               {currentTab === 'credit-notes' && (

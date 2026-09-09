@@ -229,10 +229,11 @@ export default function SalesHistoryPage({ activeBranch }) {
           className="select-control"
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
-          style={{ width: '160px', height: '38px', fontSize: '0.8rem' }}
+          style={{ width: '170px', height: '38px', fontSize: '0.8rem' }}
         >
           <option value="">Todos los estados</option>
-          <option value="completed">✅ Facturadas</option>
+          <option value="paid">✅ Pagadas</option>
+          <option value="pending">⏳ Con Saldo Pendiente</option>
           <option value="cancelled">🚫 Anuladas</option>
         </select>
 
@@ -310,8 +311,8 @@ export default function SalesHistoryPage({ activeBranch }) {
                       RD$ {Number(s.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                     </td>
                     <td>
-                      <span className={`badge ${s.status === 'cancelled' ? 'badge-danger' : 'badge-success'}`}>
-                        {s.status === 'cancelled' ? '🚫 Anulada' : '✅ Facturada'}
+                      <span className={`badge ${s.status === 'cancelled' ? 'badge-danger' : s.status === 'paid' ? 'badge-success' : 'badge-warning'}`}>
+                        {s.status === 'cancelled' ? '🚫 Anulada' : s.status === 'paid' ? '✅ Pagada' : '⏳ Pendiente'}
                       </span>
                     </td>
                     <td>

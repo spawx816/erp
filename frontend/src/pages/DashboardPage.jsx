@@ -263,6 +263,7 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                 <div
                   key={alt.id}
                   onClick={() => {
+                    if (typeof onNavigate !== 'function') return;
                     if (alt.link === 'cxc' || alt.link === 'collections') onNavigate(isAlmacen ? 'inventory' : 'collections');
                     else if (alt.link === 'credit-risk' || alt.link === 'credit_risk' || alt.link === 'customers') onNavigate(isAlmacen ? 'inventory' : 'customers');
                     else if (alt.link === 'inventory' || alt.link === 'inventory-analysis' || alt.link === 'products') onNavigate(alt.link === 'inventory-analysis' ? 'inventory-analysis' : 'inventory');
