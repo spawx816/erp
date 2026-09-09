@@ -6,6 +6,9 @@ const { pool } = require('./database/pgDb');
 
 const app = express();
 
+// Trust reverse proxy (Nginx / Docker) for accurate client IP identification
+app.set('trust proxy', 1);
+
 // Middlewares
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*';
 app.use(cors({

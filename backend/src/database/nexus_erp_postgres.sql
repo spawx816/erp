@@ -152,6 +152,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
       salary DECIMAL(14,2) DEFAULT 0.00,
       max_discount_percentage DECIMAL(5,2) DEFAULT 5.00,
       status TEXT DEFAULT 'active',
+      token_version INTEGER NOT NULL DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -368,9 +369,11 @@ $$ LANGUAGE plpgsql IMMUTABLE;
       variant_id INTEGER REFERENCES product_variants(id) ON DELETE CASCADE,
       quantity DECIMAL(14,4) NOT NULL DEFAULT 0.0000,
       reserved_quantity DECIMAL(14,4) NOT NULL DEFAULT 0.0000,
-      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(warehouse_id, product_id, variant_id)
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inventories_unique_prod ON inventories (warehouse_id, product_id) WHERE variant_id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inventories_unique_var ON inventories (warehouse_id, product_id, variant_id) WHERE variant_id IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS inventory_lots (
       id SERIAL PRIMARY KEY,
@@ -540,7 +543,8 @@ $$ LANGUAGE plpgsql IMMUTABLE;
       amount DECIMAL(14,4) NOT NULL,
       balance DECIMAL(14,4) NOT NULL,
       status TEXT DEFAULT 'pending', -- pending, partial, paid, overdue
-      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS payable_payments (
@@ -626,6 +630,9 @@ $$ LANGUAGE plpgsql IMMUTABLE;
       close_notes TEXT,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_active_register_session ON cash_sessions (cash_register_id) WHERE status = 'open';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_active_user_session ON cash_sessions (user_id) WHERE status = 'open';
 
     CREATE TABLE IF NOT EXISTS cash_movements (
       id SERIAL PRIMARY KEY,
@@ -743,7 +750,8 @@ $$ LANGUAGE plpgsql IMMUTABLE;
       discount_amount DECIMAL(14,4) DEFAULT 0.00,
       reason TEXT NOT NULL,
       status TEXT DEFAULT 'approved',
-      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
     -- 11. ACCOUNTS RECEIVABLE (CxC), PAYMENTS & COLLECTIONS
@@ -760,7 +768,8 @@ $$ LANGUAGE plpgsql IMMUTABLE;
       amount DECIMAL(14,4) NOT NULL,
       balance DECIMAL(14,4) NOT NULL,
       status TEXT DEFAULT 'pending', -- pending, partial, paid, overdue
-      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS receivable_payments (

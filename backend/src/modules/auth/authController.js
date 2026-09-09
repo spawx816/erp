@@ -100,7 +100,7 @@ const authController = {
       const activeBranchId = user.branch_id || (branches.length > 0 ? branches[0].id : null);
 
       const token = jwt.sign(
-        { userId: user.id, companyId: user.company_id, roleId: user.role_id },
+        { userId: user.id, companyId: user.company_id, roleId: user.role_id, tokenVersion: user.token_version || 1 },
         JWT_SECRET,
         { expiresIn: '12h' }
       );
@@ -180,18 +180,25 @@ const authController = {
   },
 
   logout: async (req, res) => {
-    if (req.user) {
-      logAudit({
-        companyId: req.user.company_id,
-        userId: req.user.id,
-        ipAddress: req.ip || req.connection.remoteAddress,
-        module: 'auth',
-        action: 'logout',
-        recordId: req.user.id,
-        description: `Cierre de sesión del usuario ${req.user.username}`
-      });
+    try {
+      if (req.user) {
+        // Invalidate active tokens by bumping token_version
+        await db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(req.user.id);
+
+        logAudit({
+          companyId: req.user.company_id,
+          userId: req.user.id,
+          ipAddress: req.ip || req.connection.remoteAddress,
+          module: 'auth',
+          action: 'logout',
+          recordId: req.user.id,
+          description: `Cierre de sesión y revocación de tokens del usuario ${req.user.username}`
+        });
+      }
+      return res.json({ success: true, message: 'Sesión finalizada correctamente.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
     }
-    return res.json({ success: true, message: 'Sesión finalizada correctamente.' });
   }
 };
 

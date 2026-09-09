@@ -8,11 +8,11 @@ services:
     environment:
       POSTGRES_DB: ${DB_NAME:-nexus_erp}
       POSTGRES_USER: ${DB_USER:-educrm_user}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-NuevaPasswordSegura}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-educrm_user} -d ${DB_NAME:-nexus_erp}"]
       interval: 5s
@@ -32,10 +32,12 @@ services:
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-nexus_erp}
       - DB_USER=${DB_USER:-educrm_user}
-      - DB_PASSWORD=${DB_PASSWORD:-NuevaPasswordSegura}
-      - JWT_SECRET=${JWT_SECRET}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD is required}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+    volumes:
+      - backups_data:/app/backups
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,3 +55,4 @@ services:
 
 volumes:
   postgres_data:
+  backups_data:

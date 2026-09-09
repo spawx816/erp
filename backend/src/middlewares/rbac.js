@@ -4,8 +4,8 @@ function requirePermission(permissionSlug) {
       return res.status(401).json({ success: false, message: 'No autenticado.' });
     }
 
-    // Only 'super-admin' has total wildcard bypass
-    if (req.user.role_slug === 'super-admin') {
+    // Only 'super-admin' or system 'admin' has total wildcard bypass
+    if (req.user.role_slug === 'super-admin' || req.user.role_slug === 'admin') {
       return next();
     }
 

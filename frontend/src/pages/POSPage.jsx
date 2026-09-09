@@ -424,18 +424,32 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
       const res = await api.post('/sales/checkout', payload);
       if (res.success) {
         addToast('Venta facturada exitosamente con NCF fiscal asignado.', 'success');
+        const serverItems = (res.data?.items && res.data.items.length > 0)
+          ? res.data.items
+          : cart.map(it => {
+              const itemBase = it.price * it.quantity;
+              const itemDisc = itemBase * (discountPercent / 100);
+              const itemNet = itemBase - itemDisc;
+              const itemTax = itemNet * (Number(it.tax_rate !== undefined ? it.tax_rate : 18) / 100);
+              return {
+                product_name: it.name,
+                quantity: it.quantity,
+                unit_price: it.price,
+                subtotal: itemNet,
+                total: itemNet + itemTax
+              };
+            });
+
         setCompletedSale({
           ...res.data,
           customer_name: selectedCustomer ? (selectedCustomer.company_name || `${selectedCustomer.first_name} ${selectedCustomer.last_name}`) : 'Consumidor Final',
           customer_tax_id: selectedCustomer?.tax_id || selectedCustomer?.id_card,
           seller_name: customerDetails?.customer?.salesperson_name || `${user.first_name} ${user.last_name}`,
-          items: cart.map(it => ({
-            product_name: it.name,
-            quantity: it.quantity,
-            unit_price: it.price,
-            total: (it.price * it.quantity) * 1.18
-          })),
-          payments
+          items: serverItems,
+          payments: payments.map(p => ({
+            ...p,
+            amount: Number(p.amount)
+          }))
         });
 
         // Reset cart

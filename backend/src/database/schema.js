@@ -95,6 +95,7 @@ function initSchema() {
       salary DECIMAL(14,2) DEFAULT 0.00,
       max_discount_percentage DECIMAL(5,2) DEFAULT 5.00,
       status TEXT DEFAULT 'active',
+      token_version INTEGER NOT NULL DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -483,7 +484,8 @@ function initSchema() {
       amount DECIMAL(14,4) NOT NULL,
       balance DECIMAL(14,4) NOT NULL,
       status TEXT DEFAULT 'pending', -- pending, partial, paid, overdue
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS payable_payments (
@@ -686,7 +688,8 @@ function initSchema() {
       discount_amount DECIMAL(14,4) DEFAULT 0.00,
       reason TEXT NOT NULL,
       status TEXT DEFAULT 'approved',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     -- 11. ACCOUNTS RECEIVABLE (CxC), PAYMENTS & COLLECTIONS
@@ -703,7 +706,8 @@ function initSchema() {
       amount DECIMAL(14,4) NOT NULL,
       balance DECIMAL(14,4) NOT NULL,
       status TEXT DEFAULT 'pending', -- pending, partial, paid, overdue
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS receivable_payments (

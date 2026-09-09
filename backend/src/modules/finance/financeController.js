@@ -1,5 +1,6 @@
 const { db, runTransaction } = require('../../database/db');
 const { logAudit } = require('../../middlewares/audit');
+const { generateCommercialId } = require('../../utils/idGenerator');
 
 const financeController = {
   // ACCOUNTS RECEIVABLE (CxC)
@@ -110,9 +111,7 @@ const financeController = {
       }
 
       const now = new Date();
-      const ymd = now.toISOString().slice(2, 10).replace(/-/g, '');
-      const rand = Math.floor(1000 + Math.random() * 9000);
-      const paymentNumber = `RC-${ymd}-${rand}`;
+      const paymentNumber = generateCommercialId('RC');
       const paymentDate = now.toISOString().split('T')[0];
 
       const paymentId = await runTransaction(async (txDb) => {
@@ -168,7 +167,7 @@ const financeController = {
 
           // Lock and verify receivable ownership and company
           const ar = await txDb.prepare(`
-            SELECT id, balance, status FROM accounts_receivable
+            SELECT id, sale_id, balance, status FROM accounts_receivable
             WHERE id = ? AND company_id = ? AND customer_id = ?
             FOR UPDATE
           `).get(alloc.receivable_id, companyId, customer_id);
@@ -178,7 +177,7 @@ const financeController = {
           }
 
           if (applied > Number(ar.balance) + 0.01) {
-            throw new Error(`El monto aplicado (RD$ ${applied}) excede el saldo pendiente (RD$ ${ar.balance}) del documento.`);
+            throw new Error(`El monto aplicado (RD$ ${applied.toFixed(2)}) excede el saldo pendiente (RD$ ${Number(ar.balance).toFixed(2)}) del documento.`);
           }
 
           await txDb.prepare(`
@@ -196,7 +195,21 @@ const financeController = {
             WHERE id = ?
           `).run(newBal, newStatus, alloc.receivable_id);
 
+          // Synchronize sales balance if tied to a sale (#17)
+          if (ar.sale_id) {
+            await txDb.prepare(`
+              UPDATE sales
+              SET balance = GREATEST(0, balance - ?), updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).run(applied, ar.sale_id);
+          }
+
           totalAppliedSum = Math.round((totalAppliedSum + applied) * 100) / 100;
+        }
+
+        // Validate allocations against total payment amount (#11)
+        if (targetAllocations && targetAllocations.length > 0 && totalAppliedSum > totalAmountNum + 0.01) {
+          throw new Error(`La suma de las aplicaciones (RD$ ${totalAppliedSum.toFixed(2)}) excede el monto total del pago (RD$ ${totalAmountNum.toFixed(2)}).`);
         }
 
         // 4. Deduct customer balance using PostgreSQL native GREATEST
@@ -652,24 +665,79 @@ const financeController = {
       const { id } = req.params;
       const { payment_method = 'transfer', voucher_number, notes } = req.body;
 
-      const recurring = await db.prepare(`SELECT * FROM recurring_expenses WHERE id = ? AND company_id = ?`).get(id, companyId);
-      if (!recurring) return res.status(404).json({ success: false, message: 'Obligación no encontrada.' });
+      // 1. If cash payment, require active open cash session
+      let activeSession = null;
+      if (payment_method === 'cash') {
+        activeSession = await db.prepare(`
+          SELECT id FROM cash_sessions
+          WHERE user_id = ? AND company_id = ? AND status = 'open'
+          ORDER BY id DESC LIMIT 1
+        `).get(req.user.id, companyId);
+        if (!activeSession) {
+          return res.status(400).json({
+            success: false,
+            message: 'Se requiere una sesión de caja abierta para registrar un pago de gasto fijo en efectivo.'
+          });
+        }
+      }
 
       const today = new Date().toISOString().split('T')[0];
-
-      // Calculate next due date (add 1 month)
-      const curDue = new Date(recurring.next_due_date);
-      curDue.setMonth(curDue.getMonth() + 1);
-      const nextDueStr = curDue.toISOString().split('T')[0];
+      let nextDueStr = null;
+      let obligationConcept = '';
+      let amountPaid = 0;
 
       await runTransaction(async (txDb) => {
-        // Register in expenses
-        await txDb.prepare(`
+        // 2. Lock recurring obligation with FOR UPDATE
+        const recurring = await txDb.prepare(`
+          SELECT * FROM recurring_expenses
+          WHERE id = ? AND company_id = ?
+          FOR UPDATE
+        `).get(id, companyId);
+
+        if (!recurring) {
+          throw new Error('Obligación recurrente no encontrada o no pertenece a su empresa.');
+        }
+
+        obligationConcept = recurring.concept;
+        amountPaid = Number(recurring.estimated_amount || 0);
+
+        // 3. Dynamic next_due_date calculation based on actual frequency (#22)
+        const curDue = new Date((recurring.next_due_date || today) + 'T12:00:00Z');
+        const freq = (recurring.frequency || 'monthly').toLowerCase();
+        if (freq === 'weekly') {
+          curDue.setUTCDate(curDue.getUTCDate() + 7);
+        } else if (freq === 'biweekly') {
+          curDue.setUTCDate(curDue.getUTCDate() + 14);
+        } else if (freq === 'quarterly') {
+          curDue.setUTCMonth(curDue.getUTCMonth() + 3);
+        } else if (freq === 'annually' || freq === 'yearly') {
+          curDue.setUTCFullYear(curDue.getUTCFullYear() + 1);
+        } else {
+          // monthly default
+          curDue.setUTCMonth(curDue.getUTCMonth() + 1);
+        }
+        nextDueStr = curDue.toISOString().split('T')[0];
+
+        // 4. Register in expenses
+        const resExp = await txDb.prepare(`
           INSERT INTO expenses (company_id, category_id, user_id, amount, payment_method, beneficiary, voucher_number, notes, expense_date)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(companyId, recurring.category_id, req.user.id, recurring.estimated_amount, payment_method, recurring.responsible_person, voucher_number || null, notes || `Pago recurrente: ${recurring.concept}`, today);
+        `).run(
+          companyId, recurring.category_id, req.user.id, recurring.estimated_amount,
+          payment_method, recurring.responsible_person, voucher_number || null,
+          notes || `Pago recurrente: ${recurring.concept}`, today
+        );
+        const expenseId = resExp.lastInsertRowid;
 
-        // Update recurring obligation
+        // 5. If cash, register cash outflow in cash_movements
+        if (payment_method === 'cash' && activeSession) {
+          await txDb.prepare(`
+            INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
+            VALUES (?, ?, 'expense', ?, ?, 'expenses', ?)
+          `).run(activeSession.id, req.user.id, recurring.estimated_amount, `Pago recurrente: ${recurring.concept}`, expenseId);
+        }
+
+        // 6. Update recurring obligation
         await txDb.prepare(`
           UPDATE recurring_expenses
           SET last_paid_date = ?, next_due_date = ?, status = 'pending'
@@ -677,7 +745,22 @@ const financeController = {
         `).run(today, nextDueStr, id, companyId);
       });
 
-      return res.json({ success: true, message: 'Pago de obligación registrado y siguiente vencimiento agendado.', next_due_date: nextDueStr });
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip,
+        module: 'finance',
+        action: 'pay_recurring_expense',
+        recordId: id,
+        newValues: { concept: obligationConcept, amount: amountPaid, payment_method, next_due_date: nextDueStr },
+        description: `Pago de obligación fija [${obligationConcept}] por RD$ ${amountPaid.toFixed(2)} registrado.`
+      });
+
+      return res.json({
+        success: true,
+        message: 'Pago de obligación registrado y siguiente vencimiento agendado.',
+        next_due_date: nextDueStr
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }

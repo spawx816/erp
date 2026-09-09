@@ -84,8 +84,12 @@ const cashController = {
         return res.status(400).json({ success: false, message: 'La caja registradora es obligatoria.' });
       }
 
-      const reg = await db.prepare('SELECT branch_id FROM cash_registers WHERE id = ?').get(cash_register_id);
-      const branchId = reg?.branch_id || req.user.branch_id || 1;
+      // Verify register belongs to company
+      const reg = await db.prepare('SELECT branch_id FROM cash_registers WHERE id = ? AND company_id = ?').get(cash_register_id, companyId);
+      if (!reg) {
+        return res.status(404).json({ success: false, message: 'Caja registradora no válida para su empresa.' });
+      }
+      const branchId = reg.branch_id || req.user.branch_id || 1;
       const userId = req.user.id;
 
       // Check if this register already has an open session
@@ -111,15 +115,15 @@ const cashController = {
           INSERT INTO cash_sessions (
             cash_register_id, branch_id, user_id, initial_cash, status
           ) VALUES (?, ?, ?, ?, 'open')
-        `).run(cash_register_id, branchId, userId, initial_cash);
+        `).run(cash_register_id, branchId, userId, Number(initial_cash) || 0);
         const sId = resSession.lastInsertRowid;
 
-        // Record initial deposit movement if initial cash > 0
+        // Record initial fund movement if initial cash > 0 (marked as 'initial_fund' to avoid double-counting in closing)
         if (Number(initial_cash) > 0) {
           await txDb.prepare(`
             INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason)
-            VALUES (?, ?, 'deposit', ?, 'Monto inicial de apertura de caja')
-          `).run(sId, userId, initial_cash);
+            VALUES (?, ?, 'initial_fund', ?, 'Monto inicial de apertura de caja')
+          `).run(sId, userId, Number(initial_cash));
         }
 
         return sId;
@@ -144,6 +148,7 @@ const cashController = {
 
   recordCashMovement: async (req, res) => {
     try {
+      const companyId = req.user.company_id;
       const userId = req.user.id;
       const { session_id, type, amount, reason } = req.body;
 
@@ -151,9 +156,24 @@ const cashController = {
         return res.status(400).json({ success: false, message: 'Sesión, tipo, monto y motivo son obligatorios.' });
       }
 
-      const session = await db.prepare("SELECT * FROM cash_sessions WHERE id = ? AND status = 'open'").get(session_id);
+      // Verify session belongs to company and is open
+      const session = await db.prepare(`
+        SELECT cs.*
+        FROM cash_sessions cs
+        JOIN cash_registers cr ON cs.cash_register_id = cr.id
+        WHERE cs.id = ? AND cr.company_id = ? AND cs.status = 'open'
+      `).get(session_id, companyId);
+
       if (!session) {
         return res.status(404).json({ success: false, message: 'Sesión de caja no encontrada o cerrada.' });
+      }
+
+      // Check ownership or supervisor authorization
+      const canManageCash = ['super-admin', 'admin'].includes(req.user.role_slug) ||
+        (req.user.permissions && (req.user.permissions.includes('cash.manage') || req.user.permissions.includes('cash.withdraw')));
+
+      if (Number(session.user_id) !== Number(userId) && !canManageCash) {
+        return res.status(403).json({ success: false, message: 'No está autorizado para registrar movimientos en la sesión de otro cajero.' });
       }
 
       await db.prepare(`
@@ -162,7 +182,7 @@ const cashController = {
       `).run(session_id, userId, type, Math.abs(Number(amount)), reason);
 
       logAudit({
-        companyId: req.user.company_id,
+        companyId,
         userId,
         ipAddress: req.ip,
         module: 'cash',
@@ -195,40 +215,60 @@ const cashController = {
         notes
       } = req.body;
 
-      const session = await db.prepare("SELECT * FROM cash_sessions WHERE id = ? AND status = 'open'").get(session_id);
-      if (!session) {
-        return res.status(404).json({ success: false, message: 'Sesión no encontrada o ya se encuentra cerrada.' });
+      if (!session_id) {
+        return res.status(400).json({ success: false, message: 'ID de sesión es requerido.' });
       }
-
-      // Calculate expected cash from movements
-      const movements = await db.prepare(`
-        SELECT type, SUM(amount) as total
-        FROM cash_movements
-        WHERE cash_session_id = ?
-        GROUP BY type
-      `).all(session_id);
-
-      let expectedCash = Number(session.initial_cash);
-      movements.forEach(m => {
-        if (['sale_cash', 'cxc_payment', 'deposit'].includes(m.type)) {
-          expectedCash += Number(m.total);
-        } else if (['withdrawal', 'expense', 'refund'].includes(m.type)) {
-          expectedCash -= Number(m.total);
-        }
-      });
 
       const counted = Number(counted_cash !== undefined ? counted_cash : (actual_cash !== undefined ? actual_cash : 0));
       const finalNotes = close_notes || notes || '';
-      const cashDifference = counted - expectedCash;
 
-      if (cashDifference !== 0 && (!finalNotes || finalNotes.trim() === '')) {
-        return res.status(400).json({
-          success: false,
-          message: `Existe un descuadre de caja de RD$ ${cashDifference.toFixed(2)}. Es obligatorio justificar la diferencia en las observaciones de cierre.`
+      const summary = await runTransaction(async (txDb) => {
+        // Lock session with row-level lock and verify company scope
+        const session = await txDb.prepare(`
+          SELECT cs.*
+          FROM cash_sessions cs
+          JOIN cash_registers cr ON cs.cash_register_id = cr.id
+          WHERE cs.id = ? AND cr.company_id = ? AND cs.status = 'open'
+          FOR UPDATE
+        `).get(session_id, companyId);
+
+        if (!session) {
+          throw new Error('Sesión no encontrada o ya se encuentra cerrada.');
+        }
+
+        // Verify ownership: user must own session or have supervisor privileges
+        const canCloseAny = ['super-admin', 'admin'].includes(req.user.role_slug) ||
+          (req.user.permissions && (req.user.permissions.includes('cash.manage') || req.user.permissions.includes('cash.close')));
+
+        if (Number(session.user_id) !== Number(userId) && !canCloseAny) {
+          throw new Error('No está autorizado para cerrar la sesión de caja de otro usuario.');
+        }
+
+        // Calculate expected cash: initial_cash + incoming cash movements - outgoing cash movements
+        // (Note: 'initial_fund' is excluded since initial_cash is already the starting base)
+        const movements = await txDb.prepare(`
+          SELECT type, SUM(amount) as total
+          FROM cash_movements
+          WHERE cash_session_id = ?
+          GROUP BY type
+        `).all(session_id);
+
+        let expectedCash = Number(session.initial_cash || 0);
+        movements.forEach(m => {
+          if (['sale_cash', 'cxc_payment', 'deposit'].includes(m.type)) {
+            expectedCash += Number(m.total);
+          } else if (['withdrawal', 'expense', 'refund', 'refund_cash'].includes(m.type)) {
+            expectedCash -= Number(m.total);
+          }
         });
-      }
 
-      await runTransaction(async (txDb) => {
+        expectedCash = Math.round(expectedCash * 100) / 100;
+        const cashDifference = Math.round((counted - expectedCash) * 100) / 100;
+
+        if (Math.abs(cashDifference) > 0.01 && (!finalNotes || finalNotes.trim() === '')) {
+          throw new Error(`Existe un descuadre de caja de RD$ ${cashDifference.toFixed(2)}. Es obligatorio justificar la diferencia en las observaciones de cierre.`);
+        }
+
         await txDb.prepare(`
           UPDATE cash_sessions
           SET status = 'closed',
@@ -248,6 +288,8 @@ const cashController = {
           total_card, total_transfer, total_check, total_credit,
           session_id, finalNotes, session_id
         );
+
+        return { expectedCash, counted, cashDifference, registerId: session.cash_register_id };
       });
 
       logAudit({
@@ -257,17 +299,17 @@ const cashController = {
         module: 'cash',
         action: 'close_cash',
         recordId: session_id,
-        newValues: { expectedCash, counted, cashDifference, close_notes: finalNotes },
-        description: `Cierre y arqueo de caja #${session.cash_register_id}. Esperado: RD$ ${expectedCash.toFixed(2)}, Contado: RD$ ${counted.toFixed(2)}, Dif: RD$ ${cashDifference.toFixed(2)}`
+        newValues: { expectedCash: summary.expectedCash, counted: summary.counted, cashDifference: summary.cashDifference, close_notes: finalNotes },
+        description: `Cierre y arqueo de caja #${summary.registerId}. Esperado: RD$ ${summary.expectedCash.toFixed(2)}, Contado: RD$ ${summary.counted.toFixed(2)}, Dif: RD$ ${summary.cashDifference.toFixed(2)}`
       });
 
       return res.json({
         success: true,
         message: 'Caja cerrada y arqueo completado exitosamente.',
         summary: {
-          expected_cash: expectedCash,
-          counted_cash: counted,
-          cash_difference: cashDifference
+          expected_cash: summary.expectedCash,
+          counted_cash: summary.counted,
+          cash_difference: summary.cashDifference
         }
       });
     } catch (err) {

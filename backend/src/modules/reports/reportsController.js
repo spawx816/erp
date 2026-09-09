@@ -659,30 +659,87 @@ const reportsController = {
 
   getMonthlyClosingSync: async (companyId, month, year) => {
     const curFilter = `${year}-${String(month).padStart(2, '0')}`;
-    const s = (await db.prepare(`SELECT COALESCE(SUM(total), 0) as total, COALESCE(SUM(subtotal), 0) as subtotal, COALESCE(SUM(discount_amount), 0) as discounts FROM sales WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'`).get(companyId, curFilter)) || { total: 0, subtotal: 0, discounts: 0 };
+    const s = (await db.prepare(`SELECT COALESCE(SUM(total), 0) as total, COALESCE(SUM(subtotal), 0) as net_sales, COALESCE(SUM(discount_amount), 0) as discounts FROM sales WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'`).get(companyId, curFilter)) || { total: 0, net_sales: 0, discounts: 0 };
+    
+    // Real collections query (#16)
+    const collectionsRow = await db.prepare(`
+      SELECT (
+        COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND strftime('%Y-%m', payment_date) = ?), 0) +
+        COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND sp.payment_method != 'credit'), 0)
+      ) as total
+    `).get(companyId, curFilter, companyId, curFilter);
+    const collections = collectionsRow ? Number(collectionsRow.total) || 0 : 0;
+
+    // Real credit notes (#16)
+    const creditNotesRow = await db.prepare(`
+      SELECT COALESCE(SUM(total), 0) as total
+      FROM credit_notes
+      WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?
+    `).get(companyId, curFilter);
+    const creditNotes = creditNotesRow ? Number(creditNotesRow.total) || 0 : 0;
+
+    // Real purchases (#16)
+    const purchasesRow = await db.prepare(`
+      SELECT COALESCE(SUM(total), 0) as total
+      FROM purchases
+      WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
+    `).get(companyId, curFilter);
+    const purchases = purchasesRow ? Number(purchasesRow.total) || 0 : 0;
+
+    // Real pending receivables for this month (#16)
+    const pendingReceivablesRow = await db.prepare(`
+      SELECT COALESCE(SUM(balance), 0) as total
+      FROM accounts_receivable
+      WHERE company_id = ? AND strftime('%Y-%m', issue_date) = ? AND status != 'paid'
+    `).get(companyId, curFilter);
+    const pendingReceivables = pendingReceivablesRow ? Number(pendingReceivablesRow.total) || 0 : 0;
+
     const expRow = await db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE company_id = ? AND strftime('%Y-%m', expense_date) = ?`).get(companyId, curFilter);
     const exp = expRow ? Number(expRow.total) || 0 : 0;
+
     const cogsRow = await db.prepare(`SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND s.status != 'cancelled'`).get(companyId, curFilter);
     const cogs = cogsRow ? Number(cogsRow.total) || 0 : 0;
+
     const commRow = await db.prepare(`SELECT COALESCE(SUM(commission_amount), 0) as total FROM commissions WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?`).get(companyId, curFilter);
     const comm = commRow ? Number(commRow.total) || 0 : 0;
-    const gp = Number(s.subtotal || 0) - cogs;
+
+    const gp = Number(s.net_sales || 0) - cogs;
     const np = gp - exp - comm;
+
+    // Prior month calculation
+    let prevMonth = month - 1;
+    let prevYear = year;
+    if (prevMonth === 0) { prevMonth = 12; prevYear--; }
+    const prevFilter = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+
+    const prevSalesRow = await db.prepare(`
+      SELECT COALESCE(SUM(total), 0) as total
+      FROM sales
+      WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
+    `).get(companyId, prevFilter);
+    const prevSales = prevSalesRow ? Number(prevSalesRow.total) || 0 : 0;
+
+    const prevClosingRow = await db.prepare(`
+      SELECT net_profit FROM monthly_closings
+      WHERE company_id = ? AND month = ? AND year = ?
+    `).get(companyId, prevMonth, prevYear);
+    const prevNetProfit = prevClosingRow ? Number(prevClosingRow.net_profit) || 0 : (prevSales > 0 ? prevSales * 0.15 : 0);
+
     return {
       total_sales: Number(s.total || 0),
-      net_sales: Number(s.subtotal || 0),
-      total_collections: s.total * 0.85,
-      pending_receivables: s.total * 0.15,
-      discounts: s.discounts,
-      credit_notes: 0,
-      purchases: s.total * 0.6,
+      net_sales: Number(s.net_sales || 0),
+      total_collections: collections,
+      pending_receivables: pendingReceivables,
+      discounts: Number(s.discounts || 0),
+      credit_notes: creditNotes,
+      purchases: purchases,
       operating_expenses: exp,
       commissions: comm,
       cogs: cogs,
       gross_profit: gp,
       net_profit: np,
-      prev_sales: s.total * 0.9,
-      prev_net_profit: np * 0.9
+      prev_sales: prevSales,
+      prev_net_profit: prevNetProfit
     };
   },
 
@@ -694,6 +751,17 @@ const reportsController = {
 
       // Returns data matching the selected report type for easy export or printing
       if (report_type === 'sales') {
+        let whereClauses = ["s.company_id = ?", "s.status != 'cancelled'"];
+        let params = [companyId];
+        if (start_date) {
+          whereClauses.push("date(s.created_at) >= ?");
+          params.push(start_date);
+        }
+        if (end_date) {
+          whereClauses.push("date(s.created_at) <= ?");
+          params.push(end_date);
+        }
+
         const data = await db.prepare(`
           SELECT s.invoice_number, s.sale_number, s.ncf, s.fiscal_type_code, s.created_at as date,
                  s.subtotal, s.tax_amount, s.total, s.sale_type, s.status,
@@ -703,42 +771,84 @@ const reportsController = {
           FROM sales s
           JOIN customers c ON s.customer_id = c.id
           LEFT JOIN salespeople sp ON s.salesperson_id = sp.id
-          WHERE s.company_id = ? AND s.status != 'cancelled'
+          WHERE ${whereClauses.join(' AND ')}
           ORDER BY s.created_at DESC
-          LIMIT 100
-        `).all(companyId);
+          LIMIT 200
+        `).all(...params);
         return res.json({ success: true, data });
       }
 
       if (report_type === 'cxc') {
+        let whereClauses = ["ar.company_id = ?", "ar.status != 'paid'"];
+        let params = [companyId];
+        if (start_date) {
+          whereClauses.push("date(ar.due_date) >= ?");
+          params.push(start_date);
+        }
+        if (end_date) {
+          whereClauses.push("date(ar.due_date) <= ?");
+          params.push(end_date);
+        }
+
         const data = await db.prepare(`
           SELECT ar.invoice_number, ar.ncf, ar.issue_date, ar.due_date, ar.amount, ar.balance, ar.status,
                  COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
                  c.phone as customer_phone,
                  sp.name as salesperson_name,
-                 CAST((julianday('now') - julianday(ar.due_date)) AS INTEGER) as days_overdue
+                 COALESCE(CURRENT_DATE - (ar.due_date)::date, 0) as days_overdue
           FROM accounts_receivable ar
           JOIN customers c ON ar.customer_id = c.id
           LEFT JOIN salespeople sp ON c.salesperson_id = sp.id
-          WHERE ar.company_id = ? AND ar.status != 'paid'
+          WHERE ${whereClauses.join(' AND ')}
           ORDER BY ar.due_date ASC
-        `).all(companyId);
+        `).all(...params);
         return res.json({ success: true, data });
       }
 
+      // Pre-aggregated query avoiding Cartesian product (#18)
       if (report_type === 'salespeople') {
+        let salesDateFilter = '';
+        let commDateFilter = '';
+        let salesParams = [companyId];
+        let commParams = [companyId];
+
+        if (start_date) {
+          salesDateFilter += ' AND date(s.created_at) >= ?';
+          salesParams.push(start_date);
+          commDateFilter += ' AND date(comm.created_at) >= ?';
+          commParams.push(start_date);
+        }
+        if (end_date) {
+          salesDateFilter += ' AND date(s.created_at) <= ?';
+          salesParams.push(end_date);
+          commDateFilter += ' AND date(comm.created_at) <= ?';
+          commParams.push(end_date);
+        }
+
         const data = await db.prepare(`
-          SELECT sp.name, sp.code, sp.zone, sp.monthly_goal, sp.commission_rate,
-                 COUNT(s.id) as total_invoices,
-                 COALESCE(SUM(s.total), 0) as total_sales,
-                 COALESCE(SUM(comm.commission_amount), 0) as commission_generated
+          SELECT sp.id, sp.name, sp.code, sp.zone, sp.monthly_goal, sp.commission_rate,
+                 COALESCE(s_agg.total_invoices, 0) as total_invoices,
+                 COALESCE(s_agg.total_sales, 0) as total_sales,
+                 COALESCE(comm_agg.commission_generated, 0) as commission_generated
           FROM salespeople sp
-          LEFT JOIN sales s ON s.salesperson_id = sp.id AND s.status != 'cancelled'
-          LEFT JOIN commissions comm ON comm.salesperson_id = sp.id
+          LEFT JOIN (
+            SELECT s.salesperson_id,
+                   COUNT(s.id) as total_invoices,
+                   SUM(s.total) as total_sales
+            FROM sales s
+            WHERE s.company_id = ? AND s.status != 'cancelled' ${salesDateFilter}
+            GROUP BY s.salesperson_id
+          ) s_agg ON s_agg.salesperson_id = sp.id
+          LEFT JOIN (
+            SELECT comm.salesperson_id,
+                   SUM(comm.commission_amount) as commission_generated
+            FROM commissions comm
+            WHERE comm.company_id = ? ${commDateFilter}
+            GROUP BY comm.salesperson_id
+          ) comm_agg ON comm_agg.salesperson_id = sp.id
           WHERE sp.company_id = ?
-          GROUP BY sp.id, sp.name, sp.code, sp.zone, sp.monthly_goal, sp.commission_rate
           ORDER BY total_sales DESC
-        `).all(companyId);
+        `).all(...salesParams, ...commParams, companyId);
         return res.json({ success: true, data });
       }
 

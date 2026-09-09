@@ -21,7 +21,7 @@ async function authenticateToken(req, res, next) {
     
     // Verify user still exists and is active
     const user = await db.prepare(`
-      SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email, u.max_discount_percentage, u.status,
+      SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email, u.max_discount_percentage, u.status, u.token_version,
              r.name as role_name, r.slug as role_slug,
              c.name as company_name, c.currency, c.currency_symbol, c.allow_negative_inventory
       FROM users u
@@ -32,6 +32,11 @@ async function authenticateToken(req, res, next) {
 
     if (!user) {
       return res.status(401).json({ success: false, message: 'Sesión inválida o usuario inactivo.' });
+    }
+
+    // Check token version to enforce revocation on logout or password change
+    if (decoded.tokenVersion !== undefined && user.token_version !== undefined && decoded.tokenVersion !== user.token_version) {
+      return res.status(401).json({ success: false, message: 'La sesión ha expirado o fue revocada. Inicie sesión nuevamente.' });
     }
 
     // Load user permissions

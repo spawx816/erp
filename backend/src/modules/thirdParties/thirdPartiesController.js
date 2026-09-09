@@ -369,25 +369,60 @@ const thirdPartiesController = {
       const customer = await db.prepare(`SELECT * FROM customers WHERE id = ? AND company_id = ?`).get(id, companyId);
       if (!customer) return res.status(404).json({ success: false, message: 'Cliente no encontrado.' });
 
-      // Gather debits (Invoices) and credits (Payments, Credit Notes)
-      let salesQuery = `SELECT id, sale_number as document, invoice_number, ncf, created_at as date, total as debit, 0 as credit, 'Factura' as doc_type FROM sales WHERE customer_id = ? AND status != 'cancelled'`;
-      let paymentsQuery = `SELECT id, payment_number as document, reference_number as invoice_number, '' as ncf, payment_date as date, 0 as debit, total_amount as credit, 'Cobro / Recibo' as doc_type FROM receivable_payments WHERE customer_id = ?`;
-      let creditNotesQuery = `SELECT id, credit_note_number as document, ncf as invoice_number, ncf, created_at as date, 0 as debit, total as credit, 'Nota de Crédito' as doc_type FROM credit_notes WHERE customer_id = ?`;
+      // Gather debits (Invoices) and credits (Payments, Credit Notes, and Direct POS/Sale Payments #17)
+      const salesQuery = `
+        SELECT id, sale_number as document, invoice_number, ncf, created_at as date,
+               total as debit, 0 as credit, 'Factura' as doc_type
+        FROM sales
+        WHERE customer_id = ? AND company_id = ? AND status != 'cancelled'
+      `;
+      const paymentsQuery = `
+        SELECT id, payment_number as document, reference_number as invoice_number, '' as ncf,
+               payment_date as date, 0 as debit, total_amount as credit, 'Cobro / Recibo' as doc_type
+        FROM receivable_payments
+        WHERE customer_id = ? AND company_id = ?
+      `;
+      const creditNotesQuery = `
+        SELECT id, credit_note_number as document, ncf as invoice_number, ncf,
+               created_at as date, 0 as debit, total as credit, 'Nota de Crédito' as doc_type
+        FROM credit_notes
+        WHERE customer_id = ? AND company_id = ?
+      `;
+      const salePaymentsQuery = `
+        SELECT sp.id, ('Pago ' || s.sale_number) as document, s.invoice_number, s.ncf,
+               s.created_at as date, 0 as debit, sp.amount as credit,
+               ('Pago Directo (' || sp.payment_method || ')') as doc_type
+        FROM sale_payments sp
+        JOIN sales s ON sp.sale_id = s.id
+        WHERE s.customer_id = ? AND s.company_id = ? AND s.status != 'cancelled' AND sp.payment_method != 'credit'
+      `;
 
-      const sales = await db.prepare(salesQuery).all(id);
-      const payments = await db.prepare(paymentsQuery).all(id);
-      const creditNotes = await db.prepare(creditNotesQuery).all(id);
+      const sales = await db.prepare(salesQuery).all(id, companyId);
+      const payments = await db.prepare(paymentsQuery).all(id, companyId);
+      const creditNotes = await db.prepare(creditNotesQuery).all(id, companyId);
+      const salePayments = await db.prepare(salePaymentsQuery).all(id, companyId);
 
-      const allEntries = [...sales, ...payments, ...creditNotes].sort((a, b) => new Date(a.date) - new Date(b.date));
+      const allEntries = [...sales, ...payments, ...creditNotes, ...salePayments].sort((a, b) => new Date(a.date) - new Date(b.date));
 
       let runningBalance = 0;
-      const ledger = allEntries.map(entry => {
-        runningBalance += (Number(entry.debit) - Number(entry.credit));
-        return {
-          ...entry,
-          balance: runningBalance
-        };
-      });
+      let initialBalance = 0;
+      const ledger = [];
+
+      for (const entry of allEntries) {
+        runningBalance = Math.round((runningBalance + (Number(entry.debit) - Number(entry.credit))) * 100) / 100;
+        const entryDate = entry.date ? (typeof entry.date === 'string' ? entry.date.slice(0, 10) : new Date(entry.date).toISOString().slice(0, 10)) : '';
+
+        if (start_date && entryDate < start_date) {
+          initialBalance = runningBalance;
+        } else if (end_date && entryDate > end_date) {
+          continue;
+        } else {
+          ledger.push({
+            ...entry,
+            balance: runningBalance
+          });
+        }
+      }
 
       // Query detailed sales invoices with balance and overdue status
       const invoices = await db.prepare(`
@@ -401,13 +436,16 @@ const thirdPartiesController = {
                     ELSE 0 
                END as days_overdue
         FROM sales s
-        WHERE s.customer_id = ? AND s.status != 'cancelled'
+        WHERE s.customer_id = ? AND s.company_id = ? AND s.status != 'cancelled'
         ORDER BY s.created_at DESC
-      `).all(id);
+      `).all(id, companyId);
 
       const openInvoices = invoices.filter(i => Number(i.balance) > 0);
       const overdueInvoices = invoices.filter(i => i.is_overdue);
       const overdueBalance = overdueInvoices.reduce((acc, i) => acc + Number(i.balance || 0), 0);
+      const realCustomerBalance = (customer.current_balance !== null && customer.current_balance !== undefined)
+        ? Number(customer.current_balance)
+        : runningBalance;
 
       return res.json({
         success: true,
@@ -418,8 +456,11 @@ const thirdPartiesController = {
           ledger,
           summary: {
             total_debits: sales.reduce((acc, s) => acc + Number(s.debit || 0), 0),
-            total_credits: payments.reduce((acc, p) => acc + Number(p.credit || 0), 0) + creditNotes.reduce((acc, c) => acc + Number(c.credit || 0), 0),
-            current_balance: Number(customer.current_balance || runningBalance),
+            total_credits: payments.reduce((acc, p) => acc + Number(p.credit || 0), 0) +
+                           creditNotes.reduce((acc, c) => acc + Number(c.credit || 0), 0) +
+                           salePayments.reduce((acc, sp) => acc + Number(sp.credit || 0), 0),
+            current_balance: realCustomerBalance,
+            initial_balance: initialBalance,
             open_invoices_count: openInvoices.length,
             overdue_invoices_count: overdueInvoices.length,
             overdue_balance: overdueBalance

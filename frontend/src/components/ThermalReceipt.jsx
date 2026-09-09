@@ -113,7 +113,7 @@ export default function ThermalReceipt({ saleData, onClose }) {
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>ITBIS (18%):</span>
+                <span>ITBIS:</span>
                 <span>RD$ {Number(saleData.tax_amount || 0).toFixed(2)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '13px', marginTop: '4px', borderTop: '1px solid #000', paddingTop: '4px' }}>

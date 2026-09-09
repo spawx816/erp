@@ -1,6 +1,7 @@
 const { db, runTransaction } = require('../../database/db');
 const InventoryService = require('./inventoryService');
 const { logAudit } = require('../../middlewares/audit');
+const { generateCommercialId } = require('../../utils/idGenerator');
 
 const inventoryController = {
   // Current stock list
@@ -151,7 +152,7 @@ const inventoryController = {
       const qty = Math.abs(Number(quantity)) * (adjustment_type === 'out' ? -1 : 1);
       const movType = adjustment_type === 'out' ? 'adjustment_out' : 'adjustment_in';
 
-      const result = await runTransaction(async () => {
+      const result = await runTransaction(async (txDb) => {
         const mov = await InventoryService.recordMovement({
           companyId,
           branchId: warehouse.branch_id,
@@ -162,7 +163,8 @@ const inventoryController = {
           movementType: movType,
           quantity: qty,
           unitCost: unit_cost || 0,
-          reason
+          reason,
+          txClient: txDb
         });
 
         await logAudit({
@@ -234,12 +236,16 @@ const inventoryController = {
         return res.status(400).json({ success: false, message: 'El almacén de origen y destino no pueden ser el mismo.' });
       }
 
-      const wFrom = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(from_warehouse_id);
-      const wTo = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(to_warehouse_id);
+      const wFrom = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(from_warehouse_id, companyId);
+      const wTo = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(to_warehouse_id, companyId);
 
-      const transferNumber = `TRF-${Date.now().toString().slice(-6)}`;
+      if (!wFrom || !wTo) {
+        return res.status(404).json({ success: false, message: 'Almacén de origen o destino no encontrado en su empresa.' });
+      }
 
-      const transferId = await runTransaction(async () => {
+      const transferNumber = generateCommercialId('TRF');
+
+      const transferId = await runTransaction(async (txDb) => {
         // Validate stock for all items
         for (const item of items) {
           const currentStock = await InventoryService.getCurrentStock(from_warehouse_id, item.product_id, item.variant_id);
@@ -248,7 +254,7 @@ const inventoryController = {
           }
         }
 
-        const stmtTr = db.prepare(`
+        const stmtTr = txDb.prepare(`
           INSERT INTO inventory_transfers (
             company_id, from_branch_id, from_warehouse_id, to_branch_id, to_warehouse_id,
             user_id, transfer_number, status, notes
@@ -258,7 +264,7 @@ const inventoryController = {
         const resTr = await stmtTr.run(companyId, wFrom.branch_id, from_warehouse_id, wTo.branch_id, to_warehouse_id, req.user.id, transferNumber, notes || null);
         const trId = resTr.lastInsertRowid;
 
-        const stmtItem = db.prepare(`
+        const stmtItem = txDb.prepare(`
           INSERT INTO inventory_transfer_items (transfer_id, product_id, variant_id, quantity, unit_cost)
           VALUES (?, ?, ?, ?, ?)
         `);
@@ -266,7 +272,7 @@ const inventoryController = {
         for (const item of items) {
           await stmtItem.run(trId, item.product_id, item.variant_id || null, item.quantity, item.unit_cost || 0);
 
-          // Deduct from source warehouse immediately
+          // Deduct from source warehouse immediately using transaction client
           await InventoryService.recordMovement({
             companyId,
             branchId: wFrom.branch_id,
@@ -280,7 +286,8 @@ const inventoryController = {
             unitCost: item.unit_cost || 0,
             referenceType: 'inventory_transfers',
             referenceId: trId,
-            reason: `Envío de transferencia ${transferNumber}`
+            reason: `Envío de transferencia ${transferNumber}`,
+            txClient: txDb
           });
         }
 
@@ -308,20 +315,32 @@ const inventoryController = {
       const companyId = req.user.company_id;
       const { id } = req.params;
 
-      const transfer = await db.prepare(`
-        SELECT * FROM inventory_transfers WHERE id = ? AND company_id = ?
-      `).get(id, companyId);
+      await runTransaction(async (txDb) => {
+        // Lock transfer row
+        const transfer = await txDb.prepare(`
+          SELECT * FROM inventory_transfers WHERE id = ? AND company_id = ? FOR UPDATE
+        `).get(id, companyId);
 
-      if (!transfer) {
-        return res.status(404).json({ success: false, message: 'Transferencia no encontrada.' });
-      }
+        if (!transfer) {
+          throw new Error('Transferencia no encontrada.');
+        }
 
-      if (transfer.status === 'received') {
-        return res.status(400).json({ success: false, message: 'Esta transferencia ya ha sido recibida previamente.' });
-      }
+        if (transfer.status !== 'sent') {
+          throw new Error('Esta transferencia no se encuentra en tránsito o ya ha sido recibida previamente.');
+        }
 
-      await runTransaction(async () => {
-        const items = await db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id = ?').all(id);
+        // Conditional transition sent -> received
+        const updateRes = await txDb.prepare(`
+          UPDATE inventory_transfers
+          SET status = 'received', received_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = 'sent'
+        `).run(id);
+
+        if (updateRes.changes === 0) {
+          throw new Error('Conflicto de concurrencia: la transferencia ya fue recibida simultáneamente.');
+        }
+
+        const items = await txDb.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id = ?').all(id);
 
         for (const item of items) {
           await InventoryService.recordMovement({
@@ -337,15 +356,10 @@ const inventoryController = {
             unitCost: item.unit_cost || 0,
             referenceType: 'inventory_transfers',
             referenceId: transfer.id,
-            reason: `Recepción de transferencia ${transfer.transfer_number}`
+            reason: `Recepción de transferencia ${transfer.transfer_number}`,
+            txClient: txDb
           });
         }
-
-        await db.prepare(`
-          UPDATE inventory_transfers
-          SET status = 'received', received_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(id);
 
         await logAudit({
           companyId,
@@ -354,13 +368,13 @@ const inventoryController = {
           module: 'inventory',
           action: 'receive_transfer',
           recordId: id,
-          description: `Recepción de transferencia ${transfer.transfer_number}`
+          description: `Recepción completada para transferencia ${transfer.transfer_number}`
         });
       });
 
-      return res.json({ success: true, message: 'Transferencia recibida e inventario incrementado en almacén de destino.' });
+      return res.json({ success: true, message: 'Transferencia recibida e ingresada al almacén destino exitosamente.' });
     } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      return res.status(400).json({ success: false, message: err.message });
     }
   },
 

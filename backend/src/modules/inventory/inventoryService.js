@@ -28,9 +28,32 @@ const InventoryService = {
       throw new Error(`Cantidad inválida para movimiento de inventario: ${quantity}`);
     }
 
-    // 1. Fetch current inventory with row-level lock if transactional
-    let currentInv;
+    // 1. Ensure inventory row exists to guarantee row-level lock
+    const comp = await activeDb.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
+    const allowNegative = comp && (comp.allow_negative_inventory === true || comp.allow_negative_inventory === 1 || comp.allow_negative_inventory === '1');
+
+    if (variantId) {
+      await activeDb.prepare(`
+        INSERT INTO inventories (company_id, branch_id, warehouse_id, product_id, variant_id, quantity, reserved_quantity)
+        VALUES (?, ?, ?, ?, ?, 0, 0)
+        ON CONFLICT DO NOTHING
+      `).run(companyId, branchId, warehouseId, productId, variantId);
+    } else {
+      // Use WHERE variant_id IS NULL conflict protection
+      const existing = await activeDb.prepare(`
+        SELECT id FROM inventories WHERE warehouse_id = ? AND product_id = ? AND variant_id IS NULL
+      `).get(warehouseId, productId);
+      if (!existing) {
+        await activeDb.prepare(`
+          INSERT INTO inventories (company_id, branch_id, warehouse_id, product_id, variant_id, quantity, reserved_quantity)
+          VALUES (?, ?, ?, ?, NULL, 0, 0)
+        `).run(companyId, branchId, warehouseId, productId);
+      }
+    }
+
+    // 2. Fetch locked row
     const lockClause = txClient ? ' FOR UPDATE' : '';
+    let currentInv;
     if (variantId) {
       currentInv = await activeDb.prepare(`
         SELECT id, quantity, reserved_quantity
@@ -47,36 +70,28 @@ const InventoryService = {
 
     const prevQty = currentInv ? Number(currentInv.quantity) : 0;
     const reservedQty = currentInv ? Number(currentInv.reserved_quantity || 0) : 0;
+    const effectiveAvailable = prevQty - reservedQty;
     const newQty = prevQty + changeQty;
 
-    // 2. Check negative stock constraint if decreasing
-    if (changeQty < 0) {
-      const comp = await activeDb.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
-      const allowNegative = comp && (comp.allow_negative_inventory === true || comp.allow_negative_inventory === 1 || comp.allow_negative_inventory === '1');
-      
-      // Check physical stock constraint
-      if (newQty < 0 && !allowNegative) {
-        throw new Error(`Inventario insuficiente para el producto ID ${productId}. Stock actual: ${prevQty}, Solicitado: ${Math.abs(changeQty)}`);
+    // 3. Strict verification of physical stock & reserved stock under row-level lock
+    if (changeQty < 0 && !allowNegative) {
+      if (newQty < 0 || (effectiveAvailable + changeQty < 0 && movementType !== 'sale_checkout_reserved')) {
+        throw new Error(`Inventario insuficiente para el producto ID ${productId}. Stock actual: ${prevQty} (Disponible: ${Math.max(0, effectiveAvailable)}), Solicitado: ${Math.abs(changeQty)}`);
       }
     }
 
-    // 3. Upsert inventory atomically
-    let inventoryId;
-    if (currentInv) {
-      inventoryId = currentInv.id;
-      // Atomic increment in DB
-      await activeDb.prepare(`
-        UPDATE inventories
-        SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(changeQty, inventoryId);
-    } else {
-      const insertRes = await activeDb.prepare(`
-        INSERT INTO inventories (company_id, branch_id, warehouse_id, product_id, variant_id, quantity, reserved_quantity)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
-      `).run(companyId, branchId, warehouseId, productId, variantId, newQty);
-      inventoryId = insertRes.lastInsertRowid;
+    // 4. Update inventory atomically with database-level constraint
+    const updateRes = await activeDb.prepare(`
+      UPDATE inventories
+      SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND (? = true OR quantity + ? >= 0)
+    `).run(changeQty, currentInv.id, allowNegative ? true : false, changeQty);
+
+    if (updateRes.changes === 0 && changeQty < 0 && !allowNegative) {
+      throw new Error(`Conflicto de inventario concurrente: Stock insuficiente para el producto ID ${productId}.`);
     }
+
+    const inventoryId = currentInv.id;
 
     // 4. Record Kardex movement
     const totalCost = Math.round(Math.abs(changeQty) * Number(unitCost) * 100) / 100;

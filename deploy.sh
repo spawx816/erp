@@ -41,12 +41,20 @@ if command -v psql &> /dev/null; then
         mkdir -p ../backups
         BACKUP_FILE="../backups/backup_auto_deploy_$(date +%Y%m%d_%H%M%S).sql"
         echo "💾 Generando respaldo preventivo en $BACKUP_FILE..."
-        PGPASSWORD="${DB_PASSWORD}" pg_dump -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -F p -f "$BACKUP_FILE" 2>/dev/null || echo "⚠️ Advertencia: No se pudo generar pg_dump preventivo (continuando despliegue seguro)."
+        if PGPASSWORD="${DB_PASSWORD}" pg_dump -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -F p -f "$BACKUP_FILE" 2>/dev/null && [ -s "$BACKUP_FILE" ]; then
+            echo "✅ Respaldo preventivo generado exitosamente ($(du -h "$BACKUP_FILE" | cut -f1))."
+        else
+            echo "⚠️ Advertencia: No se pudo generar pg_dump preventivo o archivo vacío (continuando despliegue seguro)."
+            rm -f "$BACKUP_FILE" 2>/dev/null || true
+        fi
     fi
 
     echo "🐘 Verificando y aplicando esquema incremental (CREATE TABLE IF NOT EXISTS)..."
     # NUNCA DROP SCHEMA. Aplicamos esquema idempotente
-    PGPASSWORD="${DB_PASSWORD}" psql -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -f src/database/nexus_erp_postgres.sql
+    PGPASSWORD="${DB_PASSWORD}" psql -v ON_ERROR_STOP=1 -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -f src/database/nexus_erp_postgres.sql
+
+    echo "⚡ Aplicando migraciones de esquema idempotentes (migrations.sql)..."
+    PGPASSWORD="${DB_PASSWORD}" psql -v ON_ERROR_STOP=1 -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -f src/database/migrations.sql
 
     # 2.2 Sembrar únicamente si la base está completamente vacía
     HAS_DATA=$(PGPASSWORD="${DB_PASSWORD}" psql -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -t -A -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'companies';" 2>/dev/null || echo "0")
@@ -54,7 +62,7 @@ if command -v psql &> /dev/null; then
         COMPANY_COUNT=$(PGPASSWORD="${DB_PASSWORD}" psql -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -t -A -c "SELECT COUNT(*) FROM companies;" 2>/dev/null || echo "0")
         if [ "$COMPANY_COUNT" = "0" ]; then
             echo "🌱 Base de datos limpia detectada. Aplicando seed inicial..."
-            PGPASSWORD="${DB_PASSWORD}" psql -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -f src/database/nexus_erp_full_seed.sql || echo "Seed inicial completado con advertencias menores."
+            PGPASSWORD="${DB_PASSWORD}" psql -v ON_ERROR_STOP=1 -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -f src/database/nexus_erp_full_seed.sql || echo "Seed inicial completado con advertencias menores."
         else
             echo "🛡️ Base de datos en producción activa con registros existentes ($COMPANY_COUNT empresas). Se preservan los datos íntegros."
         fi

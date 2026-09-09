@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const { db, runTransaction } = require('../../database/db');
 const { logAudit } = require('../../middlewares/audit');
 
@@ -249,6 +249,25 @@ const adminController = {
         return res.status(400).json({ success: false, message: 'Usuario, correo, contraseña y rol son obligatorios.' });
       }
 
+      // Validate role scope
+      const targetRole = await db.prepare('SELECT * FROM roles WHERE id = ? AND (company_id = ? OR company_id IS NULL)').get(role_id, companyId);
+      if (!targetRole) {
+        return res.status(400).json({ success: false, message: 'El rol especificado no es válido para su empresa.' });
+      }
+
+      // Prevent privilege escalation: only admin/super-admin can grant admin roles
+      if (['admin', 'super-admin'].includes(targetRole.slug) && !['admin', 'super-admin'].includes(req.user.role_slug)) {
+        return res.status(403).json({ success: false, message: 'No tiene privilegios para asignar un rol de administrador.' });
+      }
+
+      // Validate branch scope if provided
+      if (branch_id) {
+        const branchValid = await db.prepare('SELECT id FROM branches WHERE id = ? AND company_id = ?').get(branch_id, companyId);
+        if (!branchValid) {
+          return res.status(400).json({ success: false, message: 'La sucursal indicada no pertenece a su empresa.' });
+        }
+      }
+
       const existing = await db.prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email);
       if (existing) {
         return res.status(400).json({ success: false, message: 'El usuario o correo electrónico ya se encuentra registrado.' });
@@ -260,8 +279,8 @@ const adminController = {
         const stmt = await txDb.prepare(`
           INSERT INTO users (
             company_id, branch_id, role_id, username, first_name, last_name,
-            email, phone, id_card, password_hash, job_title, max_discount_percentage, status
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+            email, phone, id_card, password_hash, job_title, max_discount_percentage, status, token_version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1)
         `);
 
         const result = await stmt.run(
@@ -285,7 +304,7 @@ const adminController = {
         module: 'users',
         action: 'create_user',
         recordId: userId,
-        newValues: { username, email, role_id },
+        newValues: { username, email, role_id, branch_id, first_name, last_name },
         description: `Creación de usuario ${username} (${first_name} ${last_name})`
       });
 
@@ -307,9 +326,30 @@ const adminController = {
       const user = await db.prepare('SELECT * FROM users WHERE id = ? AND company_id = ?').get(id, companyId);
       if (!user) return res.status(404).json({ success: false, message: 'Usuario no encontrado.' });
 
+      // If updating role, validate authorization ceiling
+      if (role_id && Number(role_id) !== Number(user.role_id)) {
+        const targetRole = await db.prepare('SELECT * FROM roles WHERE id = ? AND (company_id = ? OR company_id IS NULL)').get(role_id, companyId);
+        if (!targetRole) {
+          return res.status(400).json({ success: false, message: 'El rol especificado no es válido.' });
+        }
+        if (['admin', 'super-admin'].includes(targetRole.slug) && !['admin', 'super-admin'].includes(req.user.role_slug)) {
+          return res.status(403).json({ success: false, message: 'No tiene privilegios para promover usuarios a administrador.' });
+        }
+      }
+
+      // If updating branch, validate company scope
+      if (branch_id) {
+        const branchValid = await db.prepare('SELECT id FROM branches WHERE id = ? AND company_id = ?').get(branch_id, companyId);
+        if (!branchValid) {
+          return res.status(400).json({ success: false, message: 'La sucursal indicada no pertenece a su empresa.' });
+        }
+      }
+
       let passwordHash = user.password_hash;
+      let passwordChanged = false;
       if (password && password.trim().length >= 6) {
         passwordHash = await bcrypt.hash(password, 10);
+        passwordChanged = true;
       }
 
       await runTransaction(async (txDb) => {
@@ -326,17 +366,23 @@ const adminController = {
             max_discount_percentage = COALESCE(?, max_discount_percentage),
             status = COALESCE(?, status),
             password_hash = ?,
+            token_version = CASE WHEN ? = true THEN token_version + 1 ELSE token_version END,
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND company_id = ?
         `).run(
           first_name, last_name, email, role_id, branch_id,
           phone, id_card, job_title, max_discount_percentage, status,
-          passwordHash, id, companyId
+          passwordHash, passwordChanged, id, companyId
         );
 
         if (branch_id) {
           await txDb.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(id, branch_id);
         }
+
+        // Never pass raw password or password_hash to audit log
+        const safeAuditPayload = { ...req.body };
+        delete safeAuditPayload.password;
+        delete safeAuditPayload.password_hash;
 
         logAudit({
           companyId,
@@ -345,8 +391,8 @@ const adminController = {
           module: 'users',
           action: 'update_user',
           recordId: id,
-          newValues: req.body,
-          description: `Actualización del usuario ${user.username}`
+          newValues: safeAuditPayload,
+          description: `Actualización del usuario ${user.username}${passwordChanged ? ' (contraseña modificada, sesiones previas revocadas)' : ''}`
         });
       });
 
@@ -546,9 +592,16 @@ const adminController = {
         const dbUser = process.env.DB_USER || 'educrm_user';
         const dbPassword = process.env.DB_PASSWORD || 'NuevaPasswordSegura';
 
-        const cmd = `pg_dump -h ${dbHost} -p ${dbPort} -U ${dbUser} -d ${dbName} -F p -f "${backupPath}"`;
+        const args = [
+          '-h', dbHost,
+          '-p', String(dbPort),
+          '-U', dbUser,
+          '-d', dbName,
+          '-F', 'p',
+          '-f', backupPath
+        ];
 
-        exec(cmd, { env: { ...process.env, PGPASSWORD: dbPassword }, timeout: 60000 }, async (error, stdout, stderr) => {
+        execFile('pg_dump', args, { env: { ...process.env, PGPASSWORD: dbPassword }, timeout: 60000 }, async (error, stdout, stderr) => {
           if (error || !fs.existsSync(backupPath)) {
             console.error('pg_dump error:', error || stderr);
             return res.status(500).json({

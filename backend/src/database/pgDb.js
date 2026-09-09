@@ -124,10 +124,13 @@ const db = {
         const flatParams = normalizeParams(params);
         let formattedSql = convertSqliteToPostgres(sql);
 
-        // If INSERT and doesn't have RETURNING id, append RETURNING id
+        // If INSERT and doesn't have RETURNING id, append RETURNING id (except for junction tables without id)
         const isInsert = /^\s*INSERT\s+INTO/i.test(formattedSql);
         if (isInsert && !/RETURNING/i.test(formattedSql)) {
-          formattedSql += ' RETURNING id';
+          const isNoIdTable = /INSERT\s+INTO\s+(?:user_branches|role_permissions)\b/i.test(formattedSql);
+          if (!isNoIdTable) {
+            formattedSql += ' RETURNING id';
+          }
         }
 
         try {
@@ -186,7 +189,10 @@ function makeClientDb(client) {
         let formattedSql = convertSqliteToPostgres(sql);
         const isInsert = /^\s*INSERT\s+INTO/i.test(formattedSql);
         if (isInsert && !/RETURNING/i.test(formattedSql)) {
-          formattedSql += ' RETURNING id';
+          const isNoIdTable = /INSERT\s+INTO\s+(?:user_branches|role_permissions)\b/i.test(formattedSql);
+          if (!isNoIdTable) {
+            formattedSql += ' RETURNING id';
+          }
         }
         try {
           const res = await client.query(formattedSql, flatParams);
