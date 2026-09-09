@@ -47,10 +47,12 @@ export default function SalesHistoryPage({ activeBranch }) {
   const [loading, setLoading] = useState(true);
   const [branches, setBranches] = useState([]);
   const [salespeople, setSalespeople] = useState([]);
+  const [customers, setCustomers] = useState([]);
 
   // Filter states
   const [search, setSearch] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState(activeBranch?.id !== undefined ? String(activeBranch.id) : '');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterType, setFilterType] = useState('');
   const [fiscalTypeCode, setFiscalTypeCode] = useState('');
@@ -88,7 +90,7 @@ export default function SalesHistoryPage({ activeBranch }) {
     }
   }, [activeBranch]);
 
-  // Load catalogs (branches & salespeople)
+  // Load catalogs (branches, salespeople & customers)
   useEffect(() => {
     api.get('/admin/branches-warehouses')
       .then(res => {
@@ -105,6 +107,14 @@ export default function SalesHistoryPage({ activeBranch }) {
         }
       })
       .catch(err => console.error('Error fetching salespeople:', err));
+
+    api.get('/third-parties/customers', { limit: 1000 })
+      .then(res => {
+        if (res.success && Array.isArray(res.data)) {
+          setCustomers(res.data);
+        }
+      })
+      .catch(err => console.error('Error fetching customers:', err));
   }, []);
 
   // Quick date presets calculation
@@ -143,6 +153,7 @@ export default function SalesHistoryPage({ activeBranch }) {
   const handleClearFilters = () => {
     setSearch('');
     setSelectedBranchId('');
+    setSelectedCustomerId('');
     setFilterStatus('');
     setFilterType('');
     setFiscalTypeCode('');
@@ -162,6 +173,7 @@ export default function SalesHistoryPage({ activeBranch }) {
         limit,
         search: search.trim() || undefined,
         branch_id: selectedBranchId || undefined,
+        customer_id: selectedCustomerId || undefined,
         status: filterStatus || undefined,
         sale_type: filterType || undefined,
         fiscal_type_code: fiscalTypeCode || undefined,
@@ -191,6 +203,7 @@ export default function SalesHistoryPage({ activeBranch }) {
     limit,
     search,
     selectedBranchId,
+    selectedCustomerId,
     filterStatus,
     filterType,
     fiscalTypeCode,
@@ -214,6 +227,7 @@ export default function SalesHistoryPage({ activeBranch }) {
         limit: 1000,
         search: search.trim() || undefined,
         branch_id: selectedBranchId || undefined,
+        customer_id: selectedCustomerId || undefined,
         status: filterStatus || undefined,
         sale_type: filterType || undefined,
         fiscal_type_code: fiscalTypeCode || undefined,
@@ -339,6 +353,7 @@ export default function SalesHistoryPage({ activeBranch }) {
     return Boolean(
       search.trim() ||
       selectedBranchId ||
+      selectedCustomerId ||
       filterStatus ||
       filterType ||
       fiscalTypeCode ||
@@ -347,7 +362,7 @@ export default function SalesHistoryPage({ activeBranch }) {
       endDate ||
       datePreset !== 'all'
     );
-  }, [search, selectedBranchId, filterStatus, filterType, fiscalTypeCode, salespersonId, startDate, endDate, datePreset]);
+  }, [search, selectedBranchId, selectedCustomerId, filterStatus, filterType, fiscalTypeCode, salespersonId, startDate, endDate, datePreset]);
 
   // Generate page numbers to show
   const pageNumbers = useMemo(() => {
@@ -496,7 +511,7 @@ export default function SalesHistoryPage({ activeBranch }) {
             className="select-control"
             value={selectedBranchId}
             onChange={(e) => handleFilterChange(setSelectedBranchId, e.target.value)}
-            style={{ width: '200px', height: '38px', fontSize: '0.82rem' }}
+            style={{ width: '185px', height: '38px', fontSize: '0.82rem' }}
           >
             <option value="">🏢 Todas las sucursales</option>
             {branches.map(b => (
@@ -506,17 +521,17 @@ export default function SalesHistoryPage({ activeBranch }) {
             ))}
           </select>
 
-          {/* Fiscal Voucher NCF Filter */}
+          {/* Customer Filter */}
           <select
             className="select-control"
-            value={fiscalTypeCode}
-            onChange={(e) => handleFilterChange(setFiscalTypeCode, e.target.value)}
-            style={{ width: '200px', height: '38px', fontSize: '0.82rem' }}
+            value={selectedCustomerId}
+            onChange={(e) => handleFilterChange(setSelectedCustomerId, e.target.value)}
+            style={{ width: '220px', height: '38px', fontSize: '0.82rem' }}
           >
-            <option value="">📑 Todos los comprobantes (NCF)</option>
-            {FISCAL_TYPES.map(f => (
-              <option key={f.code} value={f.code}>
-                {f.label}
+            <option value="">👥 Todos los clientes</option>
+            {customers.map(c => (
+              <option key={c.id} value={String(c.id)}>
+                {c.code ? `[${c.code}] ` : ''}{c.company_name || `${c.first_name || ''} ${c.last_name || ''}`.trim()}
               </option>
             ))}
           </select>
@@ -526,7 +541,7 @@ export default function SalesHistoryPage({ activeBranch }) {
             className="select-control"
             value={salespersonId}
             onChange={(e) => handleFilterChange(setSalespersonId, e.target.value)}
-            style={{ width: '180px', height: '38px', fontSize: '0.82rem' }}
+            style={{ width: '185px', height: '38px', fontSize: '0.82rem' }}
           >
             <option value="">👤 Todos los vendedores</option>
             {salespeople.map(sp => (
@@ -537,8 +552,22 @@ export default function SalesHistoryPage({ activeBranch }) {
           </select>
         </div>
 
-        {/* Row 2: Status, Type, Date Presets & Custom Range */}
+        {/* Row 2: NCF, Status, Type, Date Presets & Custom Range */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          {/* Fiscal Voucher NCF Filter */}
+          <select
+            className="select-control"
+            value={fiscalTypeCode}
+            onChange={(e) => handleFilterChange(setFiscalTypeCode, e.target.value)}
+            style={{ width: '190px', height: '38px', fontSize: '0.82rem' }}
+          >
+            <option value="">📑 Todos los comprobantes (NCF)</option>
+            {FISCAL_TYPES.map(f => (
+              <option key={f.code} value={f.code}>
+                {f.label}
+              </option>
+            ))}
+          </select>
           {/* Status Filter */}
           <select
             className="select-control"

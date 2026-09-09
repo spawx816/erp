@@ -60,6 +60,9 @@ INSERT INTO permissions (slug, module, name, description) VALUES
   ('dashboard.view', 'dashboard', 'Ver Dashboard', 'Permite ver métricas clave del negocio'),
   ('fiscal.manage', 'fiscal', 'Gestión Fiscal NCF', 'Permite configurar secuencias DGII'),
   ('settings.manage', 'settings', 'Configuración y Backups', 'Permite cambiar ajustes de empresa y copias de seguridad'),
+  ('salespeople.view', 'salespeople', 'Ver Vendedores', 'Permite visualizar catálogo y metas de vendedores'),
+  ('salespeople.create', 'salespeople', 'Crear Vendedores', 'Permite registrar nuevos vendedores'),
+  ('salespeople.edit', 'salespeople', 'Editar Vendedores', 'Permite modificar comisiones y datos de vendedores'),
   ('users.manage', 'admin', 'Administrar Usuarios y Roles', 'Permite crear y actualizar usuarios y asignar permisos'),
   ('audit.view', 'admin', 'Ver Auditoría', 'Permite ver los registros de auditoría del sistema')
 ON CONFLICT (slug) DO UPDATE SET

@@ -7,13 +7,25 @@ const { requirePermission } = require('../../middlewares/rbac');
 router.use(authenticateToken);
 
 // Salespeople (Vendedores)
-router.get('/salespeople', requirePermission('salespeople.view'), thirdPartiesController.getSalespeople);
+router.get('/salespeople', (req, res, next) => {
+  const perms = req.user?.permissions || [];
+  if (req.user?.role_slug === 'admin' || req.user?.role_slug === 'super-admin' || req.user?.role_slug === 'gerente' || perms.includes('*') || perms.includes('salespeople.view') || perms.includes('sales.view')) {
+    return next();
+  }
+  return requirePermission('salespeople.view')(req, res, next);
+}, thirdPartiesController.getSalespeople);
 router.get('/salespeople/:id', requirePermission('salespeople.view'), thirdPartiesController.getSalespersonById);
 router.post('/salespeople', requirePermission('salespeople.create'), thirdPartiesController.createSalesperson);
 router.put('/salespeople/:id', requirePermission('salespeople.edit'), thirdPartiesController.updateSalesperson);
 
 // Customers
-router.get('/customers', requirePermission('customers.view'), thirdPartiesController.getCustomers);
+router.get('/customers', (req, res, next) => {
+  const perms = req.user?.permissions || [];
+  if (req.user?.role_slug === 'admin' || req.user?.role_slug === 'super-admin' || req.user?.role_slug === 'gerente' || perms.includes('*') || perms.includes('customers.view') || perms.includes('sales.view')) {
+    return next();
+  }
+  return requirePermission('customers.view')(req, res, next);
+}, thirdPartiesController.getCustomers);
 router.get('/customers/:id/360', requirePermission('customers.view'), thirdPartiesController.getCustomer360);
 router.get('/customers/:id/statement', requirePermission('customers.view'), thirdPartiesController.getCustomerStatement);
 router.get('/customers/:id/collection-notes', requirePermission('customers.view'), thirdPartiesController.getCollectionNotes);
