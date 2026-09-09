@@ -116,6 +116,7 @@ export default function App() {
           currentTab={currentTab}
           setCurrentTab={setCurrentTab}
           user={user}
+          onLogout={handleLogout}
         />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
