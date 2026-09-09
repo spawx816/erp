@@ -2,62 +2,49 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const dbType = process.env.DB_TYPE || 'postgres';
-
-// Auto-initialize database
-if (dbType === 'postgres') {
-  (async () => {
-    try {
-      const { pool } = require('./database/pgDb');
-      await pool.query('SELECT 1');
-      console.log('🐘 PostgreSQL connected successfully.');
-
-      const check = await pool.query("SELECT to_regclass('public.products') as exists");
-      if (!check.rows[0].exists) {
-        console.log('🌱 Inicializando dataset completo en PostgreSQL...');
-        const sqlPath = path.resolve(__dirname, './database/nexus_erp_full_seed.sql');
-        const fallbackPath = path.resolve(__dirname, './database/nexus_erp_postgres.sql');
-        const targetPath = fs.existsSync(sqlPath) ? sqlPath : fallbackPath;
-        if (fs.existsSync(targetPath)) {
-          const sql = fs.readFileSync(targetPath, 'utf8');
-          await pool.query(sql);
-          console.log('✅ Esquema y dataset completo cargados en PostgreSQL!');
-        }
-      }
-    } catch (err) {
-      console.error('⚠️ Error conectando o inicializando PostgreSQL:', err.message);
-    }
-  })();
-} else {
-  try {
-    const { initSchema } = require('./database/schema');
-    const { runSeed } = require('./database/seeder');
-    initSchema();
-    runSeed();
-  } catch (err) {
-    console.warn('Skipping SQLite schema init:', err.message);
-  }
-}
+const { pool } = require('./database/pgDb');
 
 const app = express();
 
 // Middlewares
+const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*';
 app.use(cors({
-  origin: '*',
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-branch-id']
 }));
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
-// Health Check
-app.get('/api/v1/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    system: 'Nexus ERP - Sistema de Gestión Comercial',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0-production'
-  });
+// Health Check with real database probe
+app.get('/api/v1/health', async (req, res) => {
+  try {
+    const dbProbe = await pool.query('SELECT 1 as live');
+    const isDbLive = dbProbe.rows && dbProbe.rows.length > 0;
+    
+    if (!isDbLive) {
+      return res.status(503).json({
+        status: 'degraded',
+        database: 'unresponsive',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    return res.json({
+      status: 'ok',
+      database: 'connected',
+      system: 'Nexus ERP - Sistema de Gestión Comercial',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0-production'
+    });
+  } catch (err) {
+    return res.status(503).json({
+      status: 'error',
+      database: 'disconnected',
+      message: 'Base de datos no disponible.',
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Mount Routes
@@ -86,7 +73,9 @@ app.use((err, req, res, next) => {
 
   const message = err.type === 'entity.parse.failed'
     ? 'Formato JSON inválido en la solicitud.'
-    : (err.message || 'Error interno del servidor.');
+    : (process.env.NODE_ENV === 'production' && statusCode === 500
+        ? 'Error interno del servidor.'
+        : (err.message || 'Error interno del servidor.'));
 
   return res.status(statusCode).json({
     success: false,
@@ -94,36 +83,63 @@ app.use((err, req, res, next) => {
   });
 });
 
+async function startServer() {
+  try {
+    // 1. Verify PostgreSQL connection
+    await pool.query('SELECT 1');
+    console.log('🐘 PostgreSQL conectado exitosamente.');
+
+    // 2. Ensure schema exists
+    const check = await pool.query("SELECT to_regclass('public.companies') as exists");
+    if (!check.rows[0].exists) {
+      console.log('🌱 Inicializando esquema nativo en PostgreSQL...');
+      const schemaPath = path.resolve(__dirname, './database/nexus_erp_postgres.sql');
+      if (fs.existsSync(schemaPath)) {
+        const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+        await pool.query(schemaSql);
+        console.log('✅ Esquema inicial creado.');
+      }
+    }
+
+    const PORT = process.env.PORT || 5000;
+    const server = app.listen(PORT, () => {
+      console.log(`====================================================`);
+      console.log(` Nexus ERP - Sistema de Gestión Comercial Backend API`);
+      console.log(` Running on: http://localhost:${PORT}`);
+      console.log(` Health:     http://localhost:${PORT}/api/v1/health`);
+      console.log(`====================================================`);
+    });
+
+    // Graceful Shutdown
+    const gracefulShutdown = async (signal) => {
+      console.log(`\n🛑 Recibida señal ${signal}. Cerrando conexiones...`);
+      server.close(async () => {
+        try {
+          await pool.end();
+          console.log('🐘 Pool de PostgreSQL cerrado limpiamente.');
+          process.exit(0);
+        } catch (err) {
+          console.error('Error cerrando pool:', err);
+          process.exit(1);
+        }
+      });
+    };
+
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  } catch (err) {
+    console.error('❌ Error fatal iniciando el servidor:', err.message);
+    process.exit(1);
+  }
+}
+
+startServer();
+
 process.on('uncaughtException', (err) => {
-  console.error('CRITICAL UNCAUGHT EXCEPTION:', err);
+  console.error('CRITICAL UNCAUGHT EXCEPTION:', err.message);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('CRITICAL UNHANDLED REJECTION at:', promise, 'reason:', reason);
+process.on('unhandledRejection', (reason) => {
+  console.error('CRITICAL UNHANDLED REJECTION:', reason);
 });
-
-const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-  console.log(`====================================================`);
-  console.log(` Nexus ERP - Sistema de Gestión Comercial Backend API`);
-  console.log(` Running on: http://localhost:${PORT}`);
-  console.log(` Health:     http://localhost:${PORT}/api/v1/health`);
-  console.log(`====================================================`);
-});
-
-server.on('error', (err) => {
-  console.error('HTTP SERVER ERROR:', err);
-});
-
-server.on('close', () => {
-  console.warn('HTTP SERVER CLOSED.');
-});
-
-process.on('exit', (code) => {
-  console.log(`Node server process exited with code: ${code}`);
-});
-
-// Periodic keep-alive heartbeat
-setInterval(() => {}, 60000);
-
-module.exports = { app, server };

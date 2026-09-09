@@ -4,19 +4,29 @@ function requirePermission(permissionSlug) {
       return res.status(401).json({ success: false, message: 'No autenticado.' });
     }
 
-    // Super Admin, Admin, and Gerente have universal access
-    if (req.user.role_slug === 'super-admin' || req.user.role_slug === 'admin' || req.user.role_slug === 'gerente') {
+    // Only 'super-admin' has total wildcard bypass
+    if (req.user.role_slug === 'super-admin') {
       return next();
     }
 
-    if (!req.user.permissions || !req.user.permissions.includes(permissionSlug)) {
-      return res.status(403).json({
-        success: false,
-        message: `Acceso denegado. Se requiere el permiso: [${permissionSlug}].`
-      });
+    const permissions = req.user.permissions || [];
+
+    // Check for universal wildcard '*' or module wildcard (e.g. 'sales.*')
+    if (permissions.includes('*')) {
+      return next();
     }
 
-    next();
+    if (permissionSlug) {
+      const modulePrefix = permissionSlug.split('.')[0] + '.*';
+      if (permissions.includes(permissionSlug) || permissions.includes(modulePrefix)) {
+        return next();
+      }
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: `Acceso denegado. Se requiere el permiso específico: [${permissionSlug}].`
+    });
   };
 }
 

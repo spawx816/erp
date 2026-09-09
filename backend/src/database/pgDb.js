@@ -1,12 +1,19 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+const dbPassword = process.env.DB_PASSWORD || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('CRITICAL SECURITY ERROR: DB_PASSWORD environment variable must be set in production.');
+  }
+  return 'NuevaPasswordSegura';
+})();
+
 const pool = new Pool({
   host: process.env.DB_HOST || '127.0.0.1',
   port: parseInt(process.env.DB_PORT || '5432', 10),
   database: process.env.DB_NAME || 'nexus_erp',
   user: process.env.DB_USER || 'educrm_user',
-  password: process.env.DB_PASSWORD || 'NuevaPasswordSegura',
+  password: dbPassword,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
@@ -36,6 +43,9 @@ function convertSqliteToPostgres(sql) {
   // date('now') / datetime('now')
   converted = converted.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
   converted = converted.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'CURRENT_TIMESTAMP');
+
+  // SQLite scalar MAX(0, expr) -> PostgreSQL GREATEST(0, expr)
+  converted = converted.replace(/MAX\s*\(\s*0\s*,\s*([^)]+)\)/gi, 'GREATEST(0, $1)');
 
   // strftime translations
   converted = converted.replace(/strftime\s*\(\s*'%Y-%m'\s*,\s*'now'\s*\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY-MM')");

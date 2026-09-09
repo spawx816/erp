@@ -4,12 +4,23 @@ const InventoryService = require('../inventory/inventoryService');
 const FiscalService = require('../fiscal/fiscalService');
 const { logAudit } = require('../../middlewares/audit');
 
+// Collision-resistant document code generator
+function generateCommercialId(prefix) {
+  const now = new Date();
+  const ymd = now.toISOString().slice(2, 10).replace(/-/g, '');
+  const ms = String(now.getTime()).slice(-4);
+  const rand = Math.floor(1000 + Math.random() * 9000);
+  return `${prefix}-${ymd}-${ms}${rand}`;
+}
+
 const salesController = {
   getSales: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { search, customer_id, branch_id, status, sale_type, start_date, end_date, page = 1, limit = 50 } = req.query;
-      const offset = (page - 1) * limit;
+      const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+      const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+      const offset = (parsedPage - 1) * parsedLimit;
 
       let whereClauses = ['s.company_id = ?'];
       let params = [companyId];
@@ -69,16 +80,16 @@ const salesController = {
         WHERE ${whereSQL}
         ORDER BY s.created_at DESC
         LIMIT ? OFFSET ?
-      `).all(...params, limit, offset);
+      `).all(...params, parsedLimit, offset);
 
       return res.json({
         success: true,
         data: sales,
         pagination: {
           total: count,
-          page: parseInt(page, 10),
-          limit: parseInt(limit, 10),
-          pages: Math.ceil(count / limit)
+          page: parsedPage,
+          limit: parsedLimit,
+          pages: Math.ceil(count / parsedLimit)
         }
       });
     } catch (err) {
@@ -123,8 +134,6 @@ const salesController = {
   checkout: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const targetWarehouse = req.body?.warehouse_id ? await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(req.body.warehouse_id) : null;
-      const branchId = targetWarehouse?.branch_id || (req.headers['x-branch-id'] ? parseInt(req.headers['x-branch-id'], 10) : null) || req.user.branch_id || 1;
       const userId = req.user.id;
 
       const {
@@ -132,79 +141,94 @@ const salesController = {
         warehouse_id,
         fiscal_type_code = 'B02', // B02 default (Consumo)
         discount_percent = 0,
-        supervisor_auth, // { username, password } if discount exceeds user limit
+        supervisor_auth, // { username, password }
         notes = '',
         items = [],
         payments = [],
         is_pos = true
       } = req.body;
 
-      if (!customer_id || !warehouse_id || items.length === 0 || payments.length === 0) {
+      if (!customer_id || !warehouse_id || !Array.isArray(items) || items.length === 0 || !Array.isArray(payments) || payments.length === 0) {
         return res.status(400).json({
           success: false,
           message: 'Cliente, almacén, al menos un ítem y al menos una forma de pago son obligatorios.'
         });
       }
 
-      // Check user discount authorization
-      const discPercent = Number(discount_percent || 0);
+      // 1. Verify warehouse isolation (must belong to user company)
+      const targetWarehouse = await db.prepare('SELECT id, branch_id, company_id FROM warehouses WHERE id = ? AND company_id = ?').get(warehouse_id, companyId);
+      if (!targetWarehouse) {
+        return res.status(403).json({ success: false, message: 'El almacén especificado no existe o no pertenece a su empresa.' });
+      }
+      const branchId = targetWarehouse.branch_id || (req.headers['x-branch-id'] ? parseInt(req.headers['x-branch-id'], 10) : null) || req.user.branch_id || 1;
+
+      // 2. Validate user discount limits (preserving 0 as limit)
+      const discPercent = Math.max(0, Number(discount_percent || 0));
+      const userMaxDiscount = req.user.max_discount_percentage !== undefined && req.user.max_discount_percentage !== null
+        ? Number(req.user.max_discount_percentage)
+        : 15;
+
       let authorizedByUserId = userId;
 
-      if (discPercent > Number(req.user.max_discount_percentage || 15)) {
+      if (discPercent > userMaxDiscount) {
         if (!supervisor_auth || !supervisor_auth.username || !supervisor_auth.password) {
           return res.status(403).json({
             success: false,
             requires_supervisor_auth: true,
-            message: `El descuento solicitado (${discPercent}%) excede su límite permitido (${req.user.max_discount_percentage}%). Ingrese credenciales de supervisor/administrador.`
+            message: `El descuento solicitado (${discPercent}%) excede su límite permitido (${userMaxDiscount}%). Se requiere autenticación de supervisor.`
           });
         }
 
-        // Validate supervisor credentials
         const supervisor = await db.prepare(`
           SELECT u.id, u.password_hash, u.max_discount_percentage, r.slug as role_slug
           FROM users u
           JOIN roles r ON u.role_id = r.id
-          WHERE (u.username = ? OR u.email = ?) AND u.company_id = ? AND u.status = 'active'
+          WHERE (LOWER(u.username) = LOWER(?) OR LOWER(u.email) = LOWER(?)) AND u.company_id = ? AND u.status = 'active'
         `).get(supervisor_auth.username, supervisor_auth.username, companyId);
 
-        if (!supervisor || !bcrypt.compareSync(supervisor_auth.password, supervisor.password_hash)) {
+        if (!supervisor || !(await bcrypt.compare(supervisor_auth.password, supervisor.password_hash))) {
           return res.status(403).json({ success: false, message: 'Credenciales de supervisor no válidas.' });
         }
 
-        if (supervisor.role_slug !== 'super-admin' && Number(supervisor.max_discount_percentage) < discPercent) {
+        const allowedSupervisorRoles = ['super-admin', 'admin', 'gerente', 'supervisor'];
+        if (!allowedSupervisorRoles.includes(supervisor.role_slug)) {
+          return res.status(403).json({ success: false, message: 'El usuario no tiene rango de supervisor para autorizar descuentos.' });
+        }
+
+        if (supervisor.role_slug !== 'super-admin' && Number(supervisor.max_discount_percentage || 0) < discPercent) {
           return res.status(403).json({
             success: false,
-            message: `El supervisor indicado tampoco tiene autorización para otorgar ${discPercent}% de descuento.`
+            message: `El supervisor indicado no tiene autorización para otorgar ${discPercent}% de descuento.`
           });
         }
 
         authorizedByUserId = supervisor.id;
       }
 
-      // STRICT CASH SESSION CHECK:
-      // For POS operations and any cash transactions, an open cash session is strictly required.
+      // 3. Strict Cash Session Check for POS / cash payments
       const hasCashPayment = payments.some(p => p.payment_method === 'cash');
       let activeSession = null;
 
       if (hasCashPayment || is_pos) {
         const explicitSessionId = req.body.cash_session_id;
-
         if (explicitSessionId) {
           activeSession = await db.prepare(`
-            SELECT id, cash_register_id, branch_id FROM cash_sessions
-            WHERE id = ? AND branch_id = ? AND status = 'open'
-          `).get(explicitSessionId, branchId);
+            SELECT cs.id, cs.cash_register_id, cs.branch_id
+            FROM cash_sessions cs
+            JOIN cash_registers cr ON cs.cash_register_id = cr.id
+            WHERE cs.id = ? AND cs.branch_id = ? AND cr.company_id = ? AND cs.status = 'open'
+          `).get(explicitSessionId, branchId, companyId);
         }
 
         if (!activeSession) {
-          // Check for an open session assigned directly to this user in this branch
           activeSession = await db.prepare(`
-            SELECT id, cash_register_id, branch_id FROM cash_sessions
-            WHERE user_id = ? AND branch_id = ? AND status = 'open'
-          `).get(userId, branchId);
+            SELECT cs.id, cs.cash_register_id, cs.branch_id
+            FROM cash_sessions cs
+            JOIN cash_registers cr ON cs.cash_register_id = cr.id
+            WHERE cs.user_id = ? AND cs.branch_id = ? AND cr.company_id = ? AND cs.status = 'open'
+          `).get(userId, branchId, companyId);
         }
 
-        // If no active session found for this user/branch, strictly block the sale
         if (!activeSession) {
           return res.status(400).json({
             success: false,
@@ -214,9 +238,9 @@ const salesController = {
         }
       }
 
-      // TRANSACTION EXECUTION
-      const saleResult = await runTransaction(async () => {
-        // 1. Calculate Totals and Validate Inventory
+      // 4. TRANSACTION EXECUTION WITH PROPAGATED txDb
+      const saleResult = await runTransaction(async (txDb) => {
+        // Calculate Totals and Validate Items from DB
         let subtotal = 0;
         let totalDiscount = 0;
         let totalTax = 0;
@@ -224,34 +248,51 @@ const salesController = {
 
         const preparedItems = [];
         for (const item of items) {
-          // Check stock if physical
-          const prod = await db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id);
-          if (!prod) throw new Error(`Producto ID ${item.product_id} no encontrado.`);
+          const itemQty = Number(item.quantity);
+          if (isNaN(itemQty) || !isFinite(itemQty) || itemQty <= 0) {
+            throw new Error(`Cantidad inválida para el producto ID ${item.product_id}: ${item.quantity}`);
+          }
 
+          // Fetch product strictly isolated by company
+          const prod = await txDb.prepare('SELECT * FROM products WHERE id = ? AND company_id = ?').get(item.product_id, companyId);
+          if (!prod) throw new Error(`Producto ID ${item.product_id} no encontrado en su empresa.`);
+
+          // Validate or override unit price
+          let unitPrice = Number(prod.price);
+          if (item.unit_price !== undefined && Math.abs(Number(item.unit_price) - unitPrice) > 0.01) {
+            const canEditPrice = req.user.role_slug === 'super-admin' || (req.user.permissions && req.user.permissions.includes('sales.edit_price'));
+            if (!canEditPrice && (!supervisor_auth || !supervisor_auth.username)) {
+              throw new Error(`No tiene permisos para modificar el precio de [${prod.name}]. Precio catálogo: ${unitPrice}`);
+            }
+            unitPrice = Math.max(0, Number(item.unit_price));
+          }
+
+          // Validate inventory if physical product
           if (prod.type === 'physical') {
             const currentStock = await InventoryService.getCurrentStock(warehouse_id, item.product_id, item.variant_id || null);
-            if (currentStock < Number(item.quantity)) {
-              const comp = await db.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
-              if (!comp || comp.allow_negative_inventory === 0) {
-                throw new Error(`Inventario insuficiente para [${prod.name}]. Disponible: ${currentStock}, Solicitado: ${item.quantity}`);
+            if (currentStock < itemQty) {
+              const comp = await txDb.prepare('SELECT allow_negative_inventory FROM companies WHERE id = ?').get(companyId);
+              const allowNegative = comp && (comp.allow_negative_inventory === 1 || comp.allow_negative_inventory === true || comp.allow_negative_inventory === '1');
+              if (!allowNegative) {
+                throw new Error(`Inventario insuficiente para [${prod.name}]. Disponible: ${currentStock}, Solicitado: ${itemQty}`);
               }
             }
           }
 
-          const unitPrice = Number(item.unit_price || prod.price);
-          const itemQty = Number(item.quantity);
-          const itemBase = itemQty * unitPrice;
-          const itemDiscPercent = discPercent > 0 ? discPercent : Number(item.discount_percent || 0);
-          const itemDiscAmount = itemBase * (itemDiscPercent / 100);
-          const itemNet = itemBase - itemDiscAmount;
-          const itemTaxRate = Number(item.tax_rate !== undefined ? item.tax_rate : prod.tax_rate);
-          const itemTaxAmount = itemNet * (itemTaxRate / 100);
-          const itemTotal = itemNet + itemTaxAmount;
+          const itemBase = Math.round(itemQty * unitPrice * 100) / 100;
+          const itemDiscPercent = discPercent > 0 ? discPercent : Math.min(Math.max(0, Number(item.discount_percent || 0)), userMaxDiscount);
+          const itemDiscAmount = Math.round(itemBase * (itemDiscPercent / 100) * 100) / 100;
+          const itemNet = Math.round((itemBase - itemDiscAmount) * 100) / 100;
+          
+          // Respect 0% tax rate (exempt goods)
+          const itemTaxRate = Number(item.tax_rate !== undefined ? item.tax_rate : (prod.tax_rate !== undefined ? prod.tax_rate : 18));
+          const itemTaxAmount = Math.round(itemNet * (itemTaxRate / 100) * 100) / 100;
+          const itemTotal = Math.round((itemNet + itemTaxAmount) * 100) / 100;
 
-          subtotal += itemBase;
-          totalDiscount += itemDiscAmount;
-          totalTax += itemTaxAmount;
-          total += itemTotal;
+          subtotal = Math.round((subtotal + itemBase) * 100) / 100;
+          totalDiscount = Math.round((totalDiscount + itemDiscAmount) * 100) / 100;
+          totalTax = Math.round((totalTax + itemTaxAmount) * 100) / 100;
+          total = Math.round((total + itemTotal) * 100) / 100;
 
           preparedItems.push({
             product_id: item.product_id,
@@ -259,7 +300,7 @@ const salesController = {
             product_name: prod.name,
             product_type: prod.type,
             quantity: itemQty,
-            unit_cost: prod.cost,
+            unit_cost: prod.cost || 0,
             unit_price: unitPrice,
             discount_percent: itemDiscPercent,
             discount_amount: itemDiscAmount,
@@ -270,19 +311,23 @@ const salesController = {
           });
         }
 
-        // 2. Validate Payment amounts
-        let totalPaid = 0;
+        // 5. Payment reconciliation (SEPARATE direct payments from credit financing)
+        let directPaid = 0;
         let totalTendered = 0;
         let hasCreditPayment = false;
         let creditAmount = 0;
 
         payments.forEach(p => {
-          const amt = Number(p.amount);
-          totalPaid += amt;
-          totalTendered += Number(p.tendered || amt);
+          const amt = Math.round(Number(p.amount) * 100) / 100;
+          if (isNaN(amt) || !isFinite(amt) || amt < 0) {
+            throw new Error(`Monto de pago inválido: ${p.amount}`);
+          }
           if (p.payment_method === 'credit') {
             hasCreditPayment = true;
-            creditAmount += amt;
+            creditAmount = Math.round((creditAmount + amt) * 100) / 100;
+          } else {
+            directPaid = Math.round((directPaid + amt) * 100) / 100;
+            totalTendered = Math.round((totalTendered + Number(p.tendered || amt)) * 100) / 100;
           }
         });
 
@@ -290,76 +335,103 @@ const salesController = {
         let saleType = 'cash';
         if (hasCreditPayment && creditAmount >= total - 0.05) {
           saleType = 'credit';
-        } else if (payments.length > 1 || (hasCreditPayment && creditAmount < total)) {
+        } else if (hasCreditPayment && directPaid > 0) {
+          saleType = 'mixed';
+        } else if (payments.length > 1) {
           saleType = 'mixed';
         }
 
-        const changeGiven = Math.max(0, totalTendered - totalPaid);
+        // Change applies only to excess cash tendered
+        const changeGiven = Math.max(0, Math.round((totalTendered - directPaid) * 100) / 100);
 
-        // 3. Customer and credit checks
-        const cust = await db.prepare('SELECT salesperson_id, credit_days, credit_limit, current_balance, is_credit_blocked, requires_special_auth, allow_sales_with_overdue_invoices FROM customers WHERE id = ?').get(customer_id);
-        const salespersonId = cust ? cust.salesperson_id : null;
-        const creditDays = cust && cust.credit_days ? cust.credit_days : 30;
+        // Calculate actual unpaid balance
+        const balanceAmount = Math.max(0, Math.round((total - directPaid) * 100) / 100);
+        const initialStatus = balanceAmount === 0 ? 'paid' : (directPaid > 0 ? 'partial' : 'pending');
+
+        // Customer and Credit Checks
+        const cust = await txDb.prepare(`
+          SELECT id, salesperson_id, credit_days, credit_limit, current_balance,
+                 is_credit_blocked, requires_special_auth, allow_sales_with_overdue_invoices
+          FROM customers WHERE id = ? AND company_id = ?
+        `).get(customer_id, companyId);
+
+        if (!cust) {
+          throw new Error('Cliente no válido o no pertenece a esta empresa.');
+        }
+
+        const salespersonId = cust.salesperson_id || null;
+        const creditDays = cust.credit_days ? Number(cust.credit_days) : 30;
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + creditDays);
         const dueDateStr = dueDate.toISOString().split('T')[0];
         const issueDateStr = new Date().toISOString().split('T')[0];
 
-        const balanceAmount = Math.max(0, total - totalPaid);
-        const initialStatus = balanceAmount === 0 ? 'paid' : (totalPaid > 0 ? 'partial' : 'pending');
-
-        if (hasCreditPayment) {
-          if (!cust) {
-            throw new Error('Cliente no válido para venta a crédito.');
-          }
-          if (cust.is_credit_blocked === 1 && !supervisor_auth?.username) {
-            throw new Error('El cliente tiene el crédito bloqueado por administración.');
-          }
+        // Strict verification if credit is granted
+        if (hasCreditPayment || balanceAmount > 0) {
           const availableCredit = Number(cust.credit_limit || 0) - Number(cust.current_balance || 0);
-          if (creditAmount > availableCredit && Number(cust.credit_limit || 0) > 0 && !supervisor_auth?.username) {
-            throw new Error(`El monto a crédito (RD$ ${creditAmount.toFixed(2)}) supera el crédito disponible (RD$ ${Math.max(0, availableCredit).toFixed(2)}). Requiere autorización de supervisor.`);
+          const needsSupervisorAuth = (cust.is_credit_blocked === 1) || (balanceAmount > availableCredit && Number(cust.credit_limit || 0) > 0);
+
+          if (needsSupervisorAuth) {
+            if (!supervisor_auth || !supervisor_auth.username || !supervisor_auth.password) {
+              const reason = cust.is_credit_blocked === 1
+                ? 'El cliente tiene el crédito bloqueado por administración.'
+                : `El crédito (RD$ ${balanceAmount.toFixed(2)}) supera el crédito disponible (RD$ ${Math.max(0, availableCredit).toFixed(2)}).`;
+              throw new Error(`${reason} Requiere autenticación de supervisor.`);
+            }
+
+            const supUser = await txDb.prepare(`
+              SELECT u.id, u.password_hash, r.slug as role_slug
+              FROM users u
+              JOIN roles r ON u.role_id = r.id
+              WHERE (LOWER(u.username) = LOWER(?) OR LOWER(u.email) = LOWER(?)) AND u.company_id = ? AND u.status = 'active'
+            `).get(supervisor_auth.username, supervisor_auth.username, companyId);
+
+            if (!supUser || !(await bcrypt.compare(supervisor_auth.password, supUser.password_hash))) {
+              throw new Error('Credenciales de supervisor incorrectas para autorizar el crédito.');
+            }
+
+            const allowedRoles = ['super-admin', 'admin', 'gerente', 'supervisor'];
+            if (!allowedRoles.includes(supUser.role_slug)) {
+              throw new Error('El usuario indicado no cuenta con el rol requerido para autorizar crédito especial.');
+            }
           }
         }
 
-        // 4. Obtain Dominican NCF atomically
-        const fiscalInfo = await FiscalService.getNextNCF(companyId, branchId, fiscal_type_code);
-        const saleNumber = `VTA-${Date.now().toString().slice(-6)}`;
-        const invoiceNumber = `FAC-${Date.now().toString().slice(-6)}`;
+        // 6. Obtain Dominican NCF atomically within the transaction
+        const fiscalInfo = await FiscalService.getNextNCF(companyId, branchId, fiscal_type_code, txDb);
+        const saleNumber = generateCommercialId('VTA');
+        const invoiceNumber = generateCommercialId('FAC');
 
-        // 5. Insert Sale
-        const stmtSale = await db.prepare(`
+        // 7. Insert Sale record
+        const resSale = await txDb.prepare(`
           INSERT INTO sales (
             company_id, branch_id, warehouse_id, cash_session_id, customer_id, salesperson_id, user_id,
             sale_number, invoice_number, ncf, fiscal_type_code, sale_type,
             subtotal, discount_amount, tax_amount, total, amount_paid, balance, change_given,
             due_date, status, notes
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        const resSale = await stmtSale.run(
+        `).run(
           companyId, branchId, warehouse_id, activeSession ? activeSession.id : null, customer_id, salespersonId, userId,
           saleNumber, invoiceNumber, fiscalInfo.ncf, fiscal_type_code, saleType,
-          subtotal, totalDiscount, totalTax, total, totalPaid, balanceAmount, changeGiven,
-          saleType === 'credit' ? dueDateStr : null, initialStatus, notes
+          subtotal, totalDiscount, totalTax, total, directPaid, balanceAmount, changeGiven,
+          hasCreditPayment ? dueDateStr : null, initialStatus, notes
         );
         const saleId = resSale.lastInsertRowid;
 
         // Log sequence usage
-        await db.prepare(`
+        await txDb.prepare(`
           INSERT INTO fiscal_sequence_logs (fiscal_sequence_id, ncf, reference_type, reference_id, user_id)
           VALUES (?, ?, 'sales', ?, ?)
         `).run(fiscalInfo.sequenceId, fiscalInfo.ncf, saleId, userId);
 
-        // 6. Insert Sale Items and deduct stock (Kardex)
-        const stmtItem = await db.prepare(`
-          INSERT INTO sale_items (
-            sale_id, product_id, variant_id, product_name, quantity, unit_cost, unit_price,
-            discount_percent, discount_amount, subtotal, tax_rate, tax_amount, total
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
+        // 8. Insert Sale Items and deduct stock atomically via Kardex
         for (const item of preparedItems) {
-          await stmtItem.run(
+          await txDb.prepare(`
+            INSERT INTO sale_items (
+              sale_id, product_id, variant_id, product_name, quantity, unit_cost, unit_price,
+              discount_percent, discount_amount, subtotal, tax_rate, tax_amount, total
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
             saleId, item.product_id, item.variant_id, item.product_name, item.quantity,
             item.unit_cost, item.unit_price, item.discount_percent, item.discount_amount,
             item.subtotal, item.tax_rate, item.tax_amount, item.total
@@ -369,7 +441,7 @@ const salesController = {
             await InventoryService.recordMovement({
               companyId,
               branchId,
-              warehouseId: warehouse_id,
+              warehouseId,
               productId: item.product_id,
               variantId: item.variant_id,
               userId,
@@ -378,35 +450,34 @@ const salesController = {
               unitCost: item.unit_cost,
               referenceType: 'sales',
               referenceId: saleId,
-              reason: `Venta ${saleNumber} (NCF: ${fiscalInfo.ncf})`
+              reason: `Venta ${saleNumber} (NCF: ${fiscalInfo.ncf})`,
+              txClient: txDb
             });
           }
         }
 
-        // 7. Insert Payments
-        const stmtPayment = await db.prepare(`
-          INSERT INTO sale_payments (sale_id, payment_method, amount, tendered, change_given, reference_number, card_last_digits)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-
+        // 9. Insert Payments
         for (const p of payments) {
-          await stmtPayment.run(
+          await txDb.prepare(`
+            INSERT INTO sale_payments (sale_id, payment_method, amount, tendered, change_given, reference_number, card_last_digits)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `).run(
             saleId, p.payment_method, p.amount, p.tendered || p.amount,
             p.payment_method === 'cash' ? changeGiven : 0,
             p.reference_number || null, p.card_last_digits || null
           );
 
           if (p.payment_method === 'cash' && activeSession) {
-            await db.prepare(`
+            await txDb.prepare(`
               INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
               VALUES (?, ?, 'sale_cash', ?, ?, 'sales', ?)
             `).run(activeSession.id, userId, p.amount, `Venta en mostrador ${saleNumber}`, saleId);
           }
         }
 
-        // 8. If credit, generate Accounts Receivable (CxC) & update customer current_balance
-        if (hasCreditPayment) {
-          await db.prepare(`
+        // 10. If there is an unpaid balance / credit, generate Accounts Receivable (CxC) & update customer current_balance
+        if (hasCreditPayment || balanceAmount > 0) {
+          await txDb.prepare(`
             INSERT INTO accounts_receivable (
               company_id, branch_id, customer_id, sale_id, invoice_number, ncf,
               issue_date, due_date, amount, balance, status
@@ -416,23 +487,24 @@ const salesController = {
             issueDateStr, dueDateStr, total, balanceAmount, initialStatus
           );
 
-          await db.prepare('UPDATE customers SET current_balance = current_balance + ? WHERE id = ?').run(balanceAmount, customer_id);
+          // Correctly update customer balance with the real unpaid amount
+          await txDb.prepare('UPDATE customers SET current_balance = current_balance + ? WHERE id = ?').run(balanceAmount, customer_id);
         }
 
-        // 9. Commission calculation for assigned salesperson
+        // 11. Commission calculation for assigned salesperson
         if (salespersonId) {
-          const sp = await db.prepare('SELECT commission_rate FROM salespeople WHERE id = ?').get(salespersonId);
+          const sp = await txDb.prepare('SELECT commission_rate FROM salespeople WHERE id = ?').get(salespersonId);
           const rate = sp ? Number(sp.commission_rate) : 5.00;
           const commAmt = Math.round((subtotal * (rate / 100)) * 100) / 100;
-          await db.prepare(`
+          await txDb.prepare(`
             INSERT INTO commissions (company_id, salesperson_id, sale_id, invoice_number, base_amount, commission_rate, commission_amount, calculation_type, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'invoiced', 'pending')
           `).run(companyId, salespersonId, saleId, invoiceNumber, subtotal, rate, commAmt);
         }
 
-        // 10. If authorized discount was used, log it
-        if (discPercent > Number(req.user.max_discount_percentage || 15)) {
-          await db.prepare(`
+        // 12. If authorized discount was used, log it
+        if (discPercent > userMaxDiscount) {
+          await txDb.prepare(`
             INSERT INTO discount_authorizations (
               company_id, sale_id, requested_by_user_id, authorized_by_user_id,
               requested_percent, discount_amount, reason, status
@@ -440,185 +512,214 @@ const salesController = {
           `).run(companyId, saleId, userId, authorizedByUserId, discPercent, totalDiscount, notes || 'Descuento especial autorizado en POS');
         }
 
-        // 11. Audit Log
-        logAudit({
-          companyId,
-          userId,
-          ipAddress: req.ip,
-          module: 'sales',
-          action: 'create_sale',
-          recordId: saleId,
-          newValues: { sale_number: saleNumber, ncf: fiscalInfo.ncf, total, sale_type: saleType },
-          description: `Venta facturada ${saleNumber} | NCF: ${fiscalInfo.ncf} | Total: RD$ ${total.toFixed(2)}`
-        });
-
         return {
-          id: saleId,
-          sale_id: saleId,
-          sale_number: saleNumber,
-          invoice_number: invoiceNumber,
+          saleId,
+          saleNumber,
+          invoiceNumber,
           ncf: fiscalInfo.ncf,
-          status: initialStatus,
+          fiscal_type_code,
           subtotal,
-          total_discount: totalDiscount,
-          tax_amount: totalTax,
+          discount: totalDiscount,
+          tax: totalTax,
           total,
-          amount_paid: totalPaid,
-          change_given: changeGiven
+          paid: directPaid,
+          balance: balanceAmount,
+          change: changeGiven,
+          status: initialStatus
         };
+      });
+
+      // 13. Audit Log post commit
+      logAudit({
+        companyId,
+        userId,
+        ipAddress: req.ip,
+        module: 'sales',
+        action: 'create_sale',
+        recordId: saleResult.saleId,
+        newValues: saleResult,
+        description: `Venta creada exitosamente ${saleResult.saleNumber} (NCF: ${saleResult.ncf}) por RD$ ${saleResult.total}`
       });
 
       return res.status(201).json({
         success: true,
-        message: 'Venta facturada exitosamente.',
+        message: 'Venta procesada exitosamente.',
         data: saleResult
       });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      console.error('Checkout error:', err);
+      return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  // CANCEL / REFUND SALE (Generates NCF B04 & Kardex reversal)
-  cancelSale: async (req, res) => {
+  // VOID SALE (Cancel invoice with Credit Note B04)
+  voidSale: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
-      const {
-        reason = 'Anulación solicitada por cliente',
-        action_taken = 'refund_cash'  // refund_cash | credit_cxc | store_credit
-      } = req.body;
+      const { reason = 'Anulación de factura por error operativo', action_taken = 'store_credit' } = req.body;
 
-      const VALID_ACTIONS = ['refund_cash', 'credit_cxc', 'store_credit'];
-      if (!VALID_ACTIONS.includes(action_taken)) {
-        return res.status(400).json({ success: false, message: `Acción inválida. Usar: ${VALID_ACTIONS.join(', ')}.` });
+      const sale = await db.prepare('SELECT * FROM sales WHERE id = ? AND company_id = ?').get(id, companyId);
+      if (!sale) {
+        return res.status(404).json({ success: false, message: 'Venta no encontrada.' });
       }
-
-      const sale = await db.prepare(`SELECT * FROM sales WHERE id = ? AND company_id = ?`).get(id, companyId);
-      if (!sale) return res.status(404).json({ success: false, message: 'Venta no encontrada.' });
-
       if (sale.status === 'cancelled') {
         return res.status(400).json({ success: false, message: 'Esta venta ya se encuentra anulada.' });
       }
 
       let creditNoteResult = {};
 
-      await runTransaction(async () => {
-        // 1. Get NCF B04 for credit note
-        const b04 = await FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
-        const creditNoteNumber = `NC-${Date.now().toString().slice(-6)}`;
+      await runTransaction(async (txDb) => {
+        // 1. Get NCF B04 for credit note atomically
+        const b04 = await FiscalService.getNextNCF(companyId, sale.branch_id, 'B04', txDb);
+        const creditNoteNumber = generateCommercialId('NC');
+
+        // Check if partial returns already exist
+        const returnedRow = await txDb.prepare(`
+          SELECT COALESCE(SUM(total), 0) as returned_total
+          FROM credit_notes
+          WHERE sale_id = ? AND company_id = ?
+        `).get(sale.id, companyId);
+        const alreadyReturned = Number(returnedRow?.returned_total || 0);
+
+        const remainingTotal = Math.max(0, Math.round((Number(sale.total) - alreadyReturned) * 100) / 100);
 
         // 2. Insert credit note record
-        const stmtNC = await db.prepare(`
+        const resNC = await txDb.prepare(`
           INSERT INTO credit_notes (
             company_id, branch_id, warehouse_id, customer_id, user_id, sale_id,
             ncf, credit_note_number, return_type, reason, subtotal, tax_amount, total, action_taken
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'total', ?, ?, ?, ?, ?)
-        `);
-
-        const resNC = await stmtNC.run(
+        `).run(
           companyId, sale.branch_id, sale.warehouse_id, sale.customer_id, req.user.id, sale.id,
-          b04.ncf, creditNoteNumber, reason, sale.subtotal, sale.tax_amount, sale.total, action_taken
+          b04.ncf, creditNoteNumber, reason, sale.subtotal, sale.tax_amount, remainingTotal, action_taken
         );
         const ncId = resNC.lastInsertRowid;
 
-        // 3. Insert sale items into credit_note_items
-        const items = await db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
-        const stmtNCI = await db.prepare(`
-          INSERT INTO credit_note_items (
-            credit_note_id, product_id, variant_id, quantity, unit_price,
-            subtotal, tax_rate, tax_amount, total, returned_to_inventory
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-        `);
-
+        // 3. Revert inventory for remaining unreturned items
+        const items = await txDb.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
         for (const item of items) {
-          await stmtNCI.run(
-            ncId,
-            item.product_id,
-            item.variant_id || null,
-            Math.abs(item.quantity),
-            item.unit_price,
-            item.subtotal,
-            item.tax_rate || 0,
-            item.tax_amount || 0,
-            item.total
-          );
+          const itemReturnedRow = await txDb.prepare(`
+            SELECT COALESCE(SUM(cni.quantity), 0) as returned_qty
+            FROM credit_note_items cni
+            JOIN credit_notes cn ON cni.credit_note_id = cn.id
+            WHERE cn.sale_id = ? AND cni.product_id = ? AND cn.id != ?
+          `).get(sale.id, item.product_id, ncId);
+          const itemAlreadyReturned = Number(itemReturnedRow?.returned_qty || 0);
+          const netQtyToReturn = Math.max(0, Number(item.quantity) - itemAlreadyReturned);
 
-          // Return to stock (Kardex)
-          const prod = await db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
-          if (prod && prod.type === 'physical') {
-            await InventoryService.recordMovement({
-              companyId,
-              branchId: sale.branch_id,
-              warehouseId: sale.warehouse_id,
-              productId: item.product_id,
-              variantId: item.variant_id,
-              userId: req.user.id,
-              movementType: 'sale_return',
-              quantity: Math.abs(item.quantity),
-              unitCost: item.unit_cost,
-              referenceType: 'credit_notes',
-              referenceId: ncId,
-              reason: `Reversión por anulación de venta ${sale.sale_number} (NC: ${b04.ncf})`
-            });
+          if (netQtyToReturn > 0) {
+            await txDb.prepare(`
+              INSERT INTO credit_note_items (
+                credit_note_id, product_id, variant_id, quantity, unit_price,
+                subtotal, tax_rate, tax_amount, total, returned_to_inventory
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            `).run(
+              ncId, item.product_id, item.variant_id || null, netQtyToReturn, item.unit_price,
+              Math.round(netQtyToReturn * Number(item.unit_price) * 100) / 100,
+              item.tax_rate || 0,
+              Math.round(netQtyToReturn * Number(item.unit_price) * (Number(item.tax_rate || 0) / 100) * 100) / 100,
+              Math.round(netQtyToReturn * (Number(item.unit_price) * (1 + Number(item.tax_rate || 0) / 100)) * 100) / 100
+            );
+
+            const prod = await txDb.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
+            if (prod && prod.type === 'physical') {
+              await InventoryService.recordMovement({
+                companyId,
+                branchId: sale.branch_id,
+                warehouseId: sale.warehouse_id,
+                productId: item.product_id,
+                variantId: item.variant_id,
+                userId: req.user.id,
+                movementType: 'sale_return',
+                quantity: netQtyToReturn,
+                unitCost: item.unit_cost,
+                referenceType: 'credit_notes',
+                referenceId: ncId,
+                reason: `Reversión por anulación de venta ${sale.sale_number} (NC: ${b04.ncf})`,
+                txClient: txDb
+              });
+            }
           }
         }
 
-        // 4. Cancel accounts receivable (CxC)
-        await db.prepare(`
-          UPDATE accounts_receivable
-          SET status = 'paid', balance = 0
-          WHERE sale_id = ?
-        `).run(sale.id);
+        // 4. Cancel accounts receivable (CxC) and adjust customer balance
+        const ar = await txDb.prepare('SELECT balance FROM accounts_receivable WHERE sale_id = ?').get(sale.id);
+        if (ar && Number(ar.balance) > 0) {
+          await txDb.prepare(`
+            UPDATE accounts_receivable
+            SET status = 'cancelled', balance = 0
+            WHERE sale_id = ?
+          `).run(sale.id);
 
-        // 5. If store_credit, update customer credit_notes_balance
-        if (action_taken === 'store_credit') {
-          await db.prepare(`
+          // Deduct pending debt from customer current balance using PostgreSQL native GREATEST
+          await txDb.prepare('UPDATE customers SET current_balance = GREATEST(0, current_balance - ?) WHERE id = ?').run(Number(ar.balance), sale.customer_id);
+        }
+
+        // 5. If action is refund_cash, record cash out movement in active session
+        if (action_taken === 'refund_cash') {
+          const activeSession = await txDb.prepare(`
+            SELECT id FROM cash_sessions
+            WHERE user_id = ? AND branch_id = ? AND status = 'open'
+          `).get(req.user.id, sale.branch_id);
+
+          if (activeSession) {
+            await txDb.prepare(`
+              INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
+              VALUES (?, ?, 'refund_cash', ?, ?, 'credit_notes', ?)
+            `).run(activeSession.id, req.user.id, remainingTotal, `Devolución efectivo anulación venta ${sale.sale_number}`, ncId);
+          }
+        } else if (action_taken === 'store_credit') {
+          await txDb.prepare(`
             UPDATE customers
             SET credit_notes_balance = COALESCE(credit_notes_balance, 0) + ?
             WHERE id = ?
-          `).run(sale.total, sale.customer_id);
+          `).run(remainingTotal, sale.customer_id);
         }
 
-        // 6. Mark sale as cancelled
-        await db.prepare(`UPDATE sales SET status = 'cancelled' WHERE id = ?`).run(sale.id);
+        // 6. Cancel commissions
+        await txDb.prepare(`UPDATE commissions SET status = 'cancelled' WHERE sale_id = ?`).run(sale.id);
 
-        // 7. Audit
-        logAudit({
-          companyId,
-          userId: req.user.id,
-          ipAddress: req.ip,
-          module: 'sales',
-          action: 'cancel_sale',
-          recordId: sale.id,
-          newValues: { status: 'cancelled', ncf_b04: b04.ncf, reason, action_taken },
-          description: `Venta anulada ${sale.sale_number}. NC B04: ${b04.ncf} — Acción: ${action_taken}`
-        });
+        // 7. Mark sale as cancelled
+        await txDb.prepare(`UPDATE sales SET status = 'cancelled' WHERE id = ?`).run(sale.id);
 
-        creditNoteResult = { ncf: b04.ncf, credit_note_number: creditNoteNumber, id: ncId };
+        creditNoteResult = { ncf: b04.ncf, credit_note_number: creditNoteNumber, id: ncId, total: remainingTotal };
+      });
+
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip,
+        module: 'sales',
+        action: 'cancel_sale',
+        recordId: sale.id,
+        newValues: { status: 'cancelled', ncf_b04: creditNoteResult.ncf, reason, action_taken },
+        description: `Venta anulada ${sale.sale_number}. NC B04: ${creditNoteResult.ncf} — Acción: ${action_taken}`
       });
 
       return res.json({
         success: true,
-        message: 'Venta anulada y Nota de Crédito B04 generada correctamente.',
+        message: 'Venta anulada exitosamente y Nota de Crédito emitida.',
         credit_note: creditNoteResult
       });
     } catch (err) {
+      console.error('Void sale error:', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  // CREATE PARTIAL CREDIT NOTE (partial return without full cancellation)
+  // CREATE PARTIAL CREDIT NOTE
   createCreditNote: async (req, res) => {
     try {
       const companyId = req.user.company_id;
       const {
         sale_id,
-        items = [],          // [{ product_id, variant_id, quantity, unit_price, tax_rate }]
+        items = [], // [{ product_id, quantity }]
         reason,
         action_taken = 'refund_cash'
       } = req.body;
 
-      if (!sale_id || !reason || items.length === 0) {
+      if (!sale_id || !reason || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ success: false, message: 'sale_id, reason e items son requeridos.' });
       }
 
@@ -630,29 +731,74 @@ const salesController = {
       const sale = await db.prepare('SELECT * FROM sales WHERE id = ? AND company_id = ?').get(sale_id, companyId);
       if (!sale) return res.status(404).json({ success: false, message: 'Venta de referencia no encontrada.' });
       if (sale.status === 'cancelled') {
-        return res.status(400).json({ success: false, message: 'No se puede generar Nota de Crédito sobre una venta anulada.' });
+        return res.status(400).json({ success: false, message: 'No se puede generar Nota de Crédito sobre una venta ya anulada.' });
       }
 
       let creditNoteResult = {};
 
-      await runTransaction(async () => {
-        // Calculate totals from items
+      await runTransaction(async (txDb) => {
+        // Fetch original sale items
+        const originalItems = await txDb.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
+        const originalItemsMap = new Map(originalItems.map(it => [it.product_id, it]));
+
+        // Calculate totals validating items against original sale lines
         let subtotal = 0, taxAmount = 0, total = 0;
-        for (const item of items) {
-          const qty = Math.abs(Number(item.quantity));
-          const price = Number(item.unit_price);
-          const taxRate = Number(item.tax_rate || 0);
-          const itemSubtotal = qty * price;
-          const itemTax = itemSubtotal * (taxRate / 100);
-          subtotal += itemSubtotal;
-          taxAmount += itemTax;
-          total += itemSubtotal + itemTax;
+        const verifiedItems = [];
+
+        for (const reqItem of items) {
+          const qty = Number(reqItem.quantity);
+          if (isNaN(qty) || !isFinite(qty) || qty <= 0) {
+            throw new Error(`Cantidad inválida para devolución de producto ID ${reqItem.product_id}: ${reqItem.quantity}`);
+          }
+
+          const orig = originalItemsMap.get(reqItem.product_id);
+          if (!orig) {
+            throw new Error(`El producto ID ${reqItem.product_id} no formó parte de la venta original.`);
+          }
+
+          // Check cumulative returns for this product
+          const prevReturn = await txDb.prepare(`
+            SELECT COALESCE(SUM(cni.quantity), 0) as returned_qty
+            FROM credit_note_items cni
+            JOIN credit_notes cn ON cni.credit_note_id = cn.id
+            WHERE cn.sale_id = ? AND cni.product_id = ?
+          `).get(sale.id, reqItem.product_id);
+
+          const alreadyReturnedQty = Number(prevReturn?.returned_qty || 0);
+          const maxReturnableQty = Number(orig.quantity) - alreadyReturnedQty;
+
+          if (qty > maxReturnableQty) {
+            throw new Error(`No se puede devolver ${qty} unidad(es) de [${orig.product_name}]. Cantidad original: ${orig.quantity}, Ya devuelta: ${alreadyReturnedQty}, Máximo a devolver: ${maxReturnableQty}`);
+          }
+
+          // Use strictly original prices and taxes from sale
+          const price = Number(orig.unit_price);
+          const taxRate = Number(orig.tax_rate || 0);
+          const itemSubtotal = Math.round(qty * price * 100) / 100;
+          const itemTax = Math.round(itemSubtotal * (taxRate / 100) * 100) / 100;
+          const itemTotal = Math.round((itemSubtotal + itemTax) * 100) / 100;
+
+          subtotal = Math.round((subtotal + itemSubtotal) * 100) / 100;
+          taxAmount = Math.round((taxAmount + itemTax) * 100) / 100;
+          total = Math.round((total + itemTotal) * 100) / 100;
+
+          verifiedItems.push({
+            product_id: orig.product_id,
+            variant_id: orig.variant_id,
+            quantity: qty,
+            unit_price: price,
+            unit_cost: orig.unit_cost,
+            subtotal: itemSubtotal,
+            tax_rate: taxRate,
+            tax_amount: itemTax,
+            total: itemTotal
+          });
         }
 
-        const b04 = await FiscalService.getNextNCF(companyId, sale.branch_id, 'B04');
-        const creditNoteNumber = `NC-${Date.now().toString().slice(-6)}`;
+        const b04 = await FiscalService.getNextNCF(companyId, sale.branch_id, 'B04', txDb);
+        const creditNoteNumber = generateCommercialId('NC');
 
-        const resNC = await db.prepare(`
+        const resNC = await txDb.prepare(`
           INSERT INTO credit_notes (
             company_id, branch_id, warehouse_id, customer_id, user_id, sale_id,
             ncf, credit_note_number, return_type, reason, subtotal, tax_amount, total, action_taken
@@ -663,22 +809,15 @@ const salesController = {
         );
         const ncId = resNC.lastInsertRowid;
 
-        const stmtItem = await db.prepare(`
-          INSERT INTO credit_note_items (
-            credit_note_id, product_id, variant_id, quantity, unit_price,
-            subtotal, tax_rate, tax_amount, total, returned_to_inventory
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-        `);
+        for (const item of verifiedItems) {
+          await txDb.prepare(`
+            INSERT INTO credit_note_items (
+              credit_note_id, product_id, variant_id, quantity, unit_price,
+              subtotal, tax_rate, tax_amount, total, returned_to_inventory
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          `).run(ncId, item.product_id, item.variant_id, item.quantity, item.unit_price, item.subtotal, item.tax_rate, item.tax_amount, item.total);
 
-        for (const item of items) {
-          const qty = Math.abs(Number(item.quantity));
-          const price = Number(item.unit_price);
-          const taxRate = Number(item.tax_rate || 0);
-          const iSub = qty * price;
-          const iTax = iSub * (taxRate / 100);
-          await stmtItem.run(ncId, item.product_id, item.variant_id || null, qty, price, iSub, taxRate, iTax, iSub + iTax);
-
-          const prod = await db.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
+          const prod = await txDb.prepare('SELECT type FROM products WHERE id = ?').get(item.product_id);
           if (prod && prod.type === 'physical') {
             await InventoryService.recordMovement({
               companyId,
@@ -688,75 +827,81 @@ const salesController = {
               variantId: item.variant_id,
               userId: req.user.id,
               movementType: 'sale_return',
-              quantity: qty,
-              unitCost: price,
+              quantity: item.quantity,
+              unitCost: item.unit_cost,
               referenceType: 'credit_notes',
               referenceId: ncId,
-              reason: `Devolución parcial de venta ${sale.sale_number} (NC: ${b04.ncf})`
+              reason: `Devolución parcial de venta ${sale.sale_number} (NC: ${b04.ncf})`,
+              txClient: txDb
             });
           }
         }
 
-        if (action_taken === 'store_credit') {
-          await db.prepare(`
+        // Financial destination processing
+        if (action_taken === 'refund_cash') {
+          const activeSession = await txDb.prepare(`
+            SELECT id FROM cash_sessions
+            WHERE user_id = ? AND branch_id = ? AND status = 'open'
+          `).get(req.user.id, sale.branch_id);
+
+          if (activeSession) {
+            await txDb.prepare(`
+              INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
+              VALUES (?, ?, 'refund_cash', ?, ?, 'credit_notes', ?)
+            `).run(activeSession.id, req.user.id, total, `Devolución efectivo NC ${creditNoteNumber}`, ncId);
+          }
+        } else if (action_taken === 'credit_cxc') {
+          // Reduce Accounts Receivable
+          await txDb.prepare(`
+            UPDATE accounts_receivable
+            SET balance = GREATEST(0, balance - ?),
+                status = CASE WHEN balance - ? <= 0 THEN 'paid' ELSE 'partial' END
+            WHERE sale_id = ?
+          `).run(total, total, sale.id);
+
+          // Reduce customer current balance
+          await txDb.prepare('UPDATE customers SET current_balance = GREATEST(0, current_balance - ?) WHERE id = ?').run(total, sale.customer_id);
+        } else if (action_taken === 'store_credit') {
+          await txDb.prepare(`
             UPDATE customers SET credit_notes_balance = COALESCE(credit_notes_balance, 0) + ? WHERE id = ?
           `).run(total, sale.customer_id);
         }
 
-        logAudit({
-          companyId, userId: req.user.id, ipAddress: req.ip,
-          module: 'sales', action: 'create_credit_note',
-          recordId: ncId,
-          newValues: { ncf: b04.ncf, sale_id, reason, action_taken, total },
-          description: `NC Parcial emitida para venta ${sale.sale_number}. NCF: ${b04.ncf}`
-        });
-
         creditNoteResult = { id: ncId, ncf: b04.ncf, credit_note_number: creditNoteNumber, total };
       });
 
-      return res.status(201).json({
+      logAudit({
+        companyId, userId: req.user.id, ipAddress: req.ip,
+        module: 'sales', action: 'create_credit_note',
+        recordId: creditNoteResult.id,
+        newValues: { ncf: creditNoteResult.ncf, sale_id, reason, action_taken, total: creditNoteResult.total },
+        description: `NC Parcial emitida para venta ${sale.sale_number}. NCF: ${creditNoteResult.ncf}`
+      });
+
+      return res.json({
         success: true,
-        message: 'Nota de Crédito parcial generada exitosamente.',
+        message: 'Nota de Crédito generada exitosamente.',
         credit_note: creditNoteResult
       });
     } catch (err) {
+      console.error('Credit note error:', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   },
 
-  // QUOTES (Cotizaciones)
-  getQuotes: async (req, res) => {
-    try {
-      const companyId = req.user.company_id;
-      const quotes = await db.prepare(`
-        SELECT q.*,
-               COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
-               u.first_name || ' ' || u.last_name as seller_name
-        FROM quotes q
-        JOIN customers c ON q.customer_id = c.id
-        JOIN users u ON q.user_id = u.id
-        WHERE q.company_id = ?
-        ORDER BY q.created_at DESC
-      `).all(companyId);
-
-      return res.json({ success: true, data: quotes });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  },
-
+  // QUOTES
   createQuote: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const branchId = req.user.branch_id;
+      const branchId = req.user.branch_id || 1;
       const userId = req.user.id;
-      const { customer_id, warehouse_id, valid_days = 15, notes, items } = req.body;
+      const { customer_id, warehouse_id, valid_days = 15, notes = '', items = [] } = req.body;
 
-      if (!customer_id || !warehouse_id || !items || items.length === 0) {
-        return res.status(400).json({ success: false, message: 'Cliente, almacén y artículos requeridos.' });
+      if (!customer_id || !warehouse_id || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ success: false, message: 'Cliente, almacén y al menos un producto son requeridos.' });
       }
 
-      const quoteNumber = `COT-${Date.now().toString().slice(-6)}`;
+      const quoteNumber = generateCommercialId('COT');
       const validUntil = new Date();
       validUntil.setDate(validUntil.getDate() + Number(valid_days));
       const validUntilStr = validUntil.toISOString().split('T')[0];
@@ -765,38 +910,43 @@ const salesController = {
       let taxAmount = 0;
       let total = 0;
 
-      items.forEach(it => {
-        const lineSub = Number(it.quantity) * Number(it.unit_price);
-        const lineTax = lineSub * (Number(it.tax_rate || 18) / 100);
-        subtotal += lineSub;
-        taxAmount += lineTax;
-        total += lineSub + lineTax;
-      });
+      for (const it of items) {
+        const qty = Number(it.quantity);
+        const price = Number(it.unit_price);
+        if (isNaN(qty) || !isFinite(qty) || qty <= 0 || isNaN(price) || price < 0) {
+          return res.status(400).json({ success: false, message: 'Cantidades y precios de cotización deben ser positivos y válidos.' });
+        }
+        const taxRate = Number(it.tax_rate !== undefined ? it.tax_rate : 18);
+        const lineSub = Math.round(qty * price * 100) / 100;
+        const lineTax = Math.round(lineSub * (taxRate / 100) * 100) / 100;
+        subtotal = Math.round((subtotal + lineSub) * 100) / 100;
+        taxAmount = Math.round((taxAmount + lineTax) * 100) / 100;
+        total = Math.round((total + (lineSub + lineTax)) * 100) / 100;
+      }
 
-      const qId = await runTransaction(async () => {
-        const stmtQ = await db.prepare(`
+      const qId = await runTransaction(async (txDb) => {
+        const resQ = await txDb.prepare(`
           INSERT INTO quotes (
             company_id, branch_id, warehouse_id, customer_id, user_id,
             quote_number, valid_until, subtotal, tax_amount, total, notes, status
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent')
-        `);
-
-        const resQ = await stmtQ.run(
+        `).run(
           companyId, branchId, warehouse_id, customer_id, userId,
           quoteNumber, validUntilStr, subtotal, taxAmount, total, notes || null
         );
         const id = resQ.lastInsertRowid;
 
-        const stmtItem = await db.prepare(`
-          INSERT INTO quote_items (
-            quote_id, product_id, variant_id, quantity, unit_price, subtotal, tax_rate, tax_amount, total
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
         for (const it of items) {
-          const lSub = Number(it.quantity) * Number(it.unit_price);
-          const lTax = lSub * (Number(it.tax_rate || 18) / 100);
-          await stmtItem.run(id, it.product_id, it.variant_id || null, it.quantity, it.unit_price, lSub, it.tax_rate || 18, lTax, lSub + lTax);
+          const qty = Number(it.quantity);
+          const price = Number(it.unit_price);
+          const taxRate = Number(it.tax_rate !== undefined ? it.tax_rate : 18);
+          const lSub = Math.round(qty * price * 100) / 100;
+          const lTax = Math.round(lSub * (taxRate / 100) * 100) / 100;
+          await txDb.prepare(`
+            INSERT INTO quote_items (
+              quote_id, product_id, variant_id, quantity, unit_price, subtotal, tax_rate, tax_amount, total
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(id, it.product_id, it.variant_id || null, qty, price, lSub, taxRate, lTax, lSub + lTax);
         }
 
         return id;
@@ -848,7 +998,7 @@ const salesController = {
         UPDATE commissions
         SET status = 'paid', paid_at = CURRENT_TIMESTAMP, receipt_number = ?
         WHERE id IN (${placeholders}) AND company_id = ?
-      `).run(receipt_number || `COM-PAY-${Date.now()}`, ...commission_ids, companyId);
+      `).run(receipt_number || generateCommercialId('COM-PAY'), ...commission_ids, companyId);
       return res.json({ success: true, message: 'Comisiones marcadas como pagadas.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -937,7 +1087,41 @@ const salesController = {
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
-  }
+  },
+
+  getQuotes: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { customer_id, status, search } = req.query;
+      let where = 'q.company_id = ?';
+      const params = [companyId];
+
+      if (customer_id) { where += ' AND q.customer_id = ?'; params.push(customer_id); }
+      if (status) { where += ' AND q.status = ?'; params.push(status); }
+      if (search) {
+        where += ' AND (q.quote_number LIKE ? OR c.company_name LIKE ? OR c.first_name LIKE ?)';
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+
+      const quotes = await db.prepare(`
+        SELECT q.*,
+               COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
+               u.first_name || ' ' || u.last_name as user_name
+        FROM quotes q
+        JOIN customers c ON q.customer_id = c.id
+        JOIN users u ON q.user_id = u.id
+        WHERE ${where}
+        ORDER BY q.created_at DESC
+      `).all(...params);
+
+      return res.json({ success: true, data: quotes });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  // Alias for route consistency
+  cancelSale: (req, res) => salesController.voidSale(req, res)
 };
 
 module.exports = salesController;

@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 const { db, runTransaction } = require('../../database/db');
 const { logAudit } = require('../../middlewares/audit');
 
@@ -121,16 +122,31 @@ const adminController = {
       const companyId = req.user.company_id;
       const { customer_id, auth_type, requested_percent, reason, supervisor_username, supervisor_password } = req.body;
 
-      // Verify supervisor credentials
+      if (!supervisor_username || !supervisor_password) {
+        return res.status(400).json({ success: false, message: 'Usuario y contraseña del supervisor son requeridos.' });
+      }
+
+      // 1. Verify supervisor credentials
       const supervisor = await db.prepare(`
         SELECT u.id, u.password_hash, r.slug as role_slug
         FROM users u
         JOIN roles r ON u.role_id = r.id
-        WHERE (u.username = ? OR u.email = ?) AND u.company_id = ? AND u.status = 'active'
+        WHERE (LOWER(u.username) = LOWER(?) OR LOWER(u.email) = LOWER(?)) AND u.company_id = ? AND u.status = 'active'
       `).get(supervisor_username, supervisor_username, companyId);
 
-      if (!supervisor || !bcrypt.compareSync(supervisor_password, supervisor.password_hash)) {
+      if (!supervisor || !(await bcrypt.compare(supervisor_password, supervisor.password_hash))) {
         return res.status(403).json({ success: false, message: 'Credenciales de supervisor no válidas.' });
+      }
+
+      // 2. Enforce separation of duties: requester cannot be the supervisor authorizer
+      if (supervisor.id === req.user.id) {
+        return res.status(403).json({ success: false, message: 'El solicitante no puede autorizar su propia solicitud (segregación de funciones requerida).' });
+      }
+
+      // 3. Verify supervisor role/privilege
+      const allowedRoles = ['super-admin', 'admin', 'gerente', 'supervisor'];
+      if (!allowedRoles.includes(supervisor.role_slug)) {
+        return res.status(403).json({ success: false, message: 'El usuario indicado no tiene rango de supervisor o administrador para autorizar excepciones.' });
       }
 
       const stmt = await db.prepare(`
@@ -160,8 +176,40 @@ const adminController = {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
-      await db.prepare(`UPDATE discount_authorizations SET status = 'approved', authorized_by_user_id = ? WHERE id = ? AND company_id = ?`).run(req.user.id, id, companyId);
-      return res.json({ success: true, message: 'Autorización aprobada.' });
+
+      // 1. Verify user has supervisor / admin rights or permissions
+      const allowedRoles = ['super-admin', 'admin', 'gerente', 'supervisor'];
+      const hasPermission = allowedRoles.includes(req.user.role_slug) || (req.user.permissions && req.user.permissions.includes('authorizations.approve'));
+      if (!hasPermission) {
+        return res.status(403).json({ success: false, message: 'No tiene facultades para aprobar autorizaciones especiales.' });
+      }
+
+      // 2. Fetch authorization and check state and separation of duties
+      const auth = await db.prepare('SELECT * FROM discount_authorizations WHERE id = ? AND company_id = ?').get(id, companyId);
+      if (!auth) {
+        return res.status(404).json({ success: false, message: 'Autorización no encontrada.' });
+      }
+
+      if (auth.status !== 'pending') {
+        return res.status(400).json({ success: false, message: `La autorización ya fue procesada (Estado actual: ${auth.status}).` });
+      }
+
+      if (auth.requested_by_user_id === req.user.id && req.user.role_slug !== 'super-admin') {
+        return res.status(403).json({ success: false, message: 'El solicitante no puede autorizar su propia petición.' });
+      }
+
+      await db.prepare(`UPDATE discount_authorizations SET status = 'approved', authorized_by_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?`).run(req.user.id, id, companyId);
+      
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        module: 'authorizations',
+        action: 'approve',
+        recordId: String(id),
+        description: `Autorización ID ${id} aprobada por ${req.user.username}`
+      });
+
+      return res.json({ success: true, message: 'Autorización aprobada exitosamente.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -206,10 +254,10 @@ const adminController = {
         return res.status(400).json({ success: false, message: 'El usuario o correo electrónico ya se encuentra registrado.' });
       }
 
-      const passwordHash = bcrypt.hashSync(password, 10);
+      const passwordHash = await bcrypt.hash(password, 10);
 
-      const userId = await runTransaction(async () => {
-        const stmt = await db.prepare(`
+      const userId = await runTransaction(async (txDb) => {
+        const stmt = await txDb.prepare(`
           INSERT INTO users (
             company_id, branch_id, role_id, username, first_name, last_name,
             email, phone, id_card, password_hash, job_title, max_discount_percentage, status
@@ -224,21 +272,21 @@ const adminController = {
 
         // Assign branch
         if (branch_id) {
-          await db.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(uid, branch_id);
+          await txDb.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(uid, branch_id);
         }
 
-        logAudit({
-          companyId,
-          userId: req.user.id,
-          ipAddress: req.ip,
-          module: 'users',
-          action: 'create_user',
-          recordId: uid,
-          newValues: { username, email, role_id },
-          description: `Creación de usuario ${username} (${first_name} ${last_name})`
-        });
-
         return uid;
+      });
+
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip,
+        module: 'users',
+        action: 'create_user',
+        recordId: userId,
+        newValues: { username, email, role_id },
+        description: `Creación de usuario ${username} (${first_name} ${last_name})`
       });
 
       return res.status(201).json({ success: true, message: 'Usuario creado exitosamente.', user_id: userId });
@@ -259,13 +307,13 @@ const adminController = {
       const user = await db.prepare('SELECT * FROM users WHERE id = ? AND company_id = ?').get(id, companyId);
       if (!user) return res.status(404).json({ success: false, message: 'Usuario no encontrado.' });
 
-      await runTransaction(async () => {
-        let passwordHash = user.password_hash;
-        if (password && password.trim().length >= 6) {
-          passwordHash = bcrypt.hashSync(password, 10);
-        }
+      let passwordHash = user.password_hash;
+      if (password && password.trim().length >= 6) {
+        passwordHash = await bcrypt.hash(password, 10);
+      }
 
-        await db.prepare(`
+      await runTransaction(async (txDb) => {
+        await txDb.prepare(`
           UPDATE users SET
             first_name = COALESCE(?, first_name),
             last_name = COALESCE(?, last_name),
@@ -287,7 +335,7 @@ const adminController = {
         );
 
         if (branch_id) {
-          await db.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(id, branch_id);
+          await txDb.prepare('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)').run(id, branch_id);
         }
 
         logAudit({
@@ -450,25 +498,80 @@ const adminController = {
   createBackup: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const backupDir = path.resolve(__dirname, '../../../data/backups');
+      const backupDir = path.resolve(__dirname, '../../../../backups');
       if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
       }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `sgc_backup_${timestamp}.sqlite`;
-      const backupPath = path.resolve(backupDir, filename);
 
-      // Perform sqlite backup safely using better-sqlite3 backup API
+      // Check if sqlite backup method is available (legacy)
       if (typeof db.backup === 'function') {
-        db.backup(backupPath)
-          .then(async () => {
-            const stats = fs.statSync(backupPath);
-            const stmt = await db.prepare(`
+        const filename = `sgc_backup_${timestamp}.sqlite`;
+        const backupPath = path.resolve(backupDir, filename);
+        try {
+          await db.backup(backupPath);
+          const stats = fs.statSync(backupPath);
+          await db.prepare(`
+            INSERT INTO backups (company_id, filename, file_path, size_bytes, backup_type, status)
+            VALUES (?, ?, ?, ?, 'manual', 'completed')
+          `).run(companyId, filename, backupPath, stats.size);
+
+          logAudit({
+            companyId,
+            userId: req.user.id,
+            ipAddress: req.ip,
+            module: 'system',
+            action: 'backup_created',
+            newValues: { filename, size: stats.size },
+            description: `Copia de seguridad SQLite creada: ${filename} (${(stats.size / 1024).toFixed(1)} KB)`
+          });
+
+          return res.json({
+            success: true,
+            message: 'Copia de seguridad generada exitosamente.',
+            backup: { filename, size_bytes: stats.size, path: backupPath }
+          });
+        } catch (err) {
+          return res.status(500).json({ success: false, message: 'Error generando backup.', error: err.message });
+        }
+      } else {
+        // Native PostgreSQL Backup via pg_dump
+        const filename = `backup_nexus_erp_${timestamp}.sql`;
+        const backupPath = path.resolve(backupDir, filename);
+
+        const dbHost = process.env.DB_HOST || '127.0.0.1';
+        const dbPort = process.env.DB_PORT || '5432';
+        const dbName = process.env.DB_NAME || 'nexus_erp';
+        const dbUser = process.env.DB_USER || 'educrm_user';
+        const dbPassword = process.env.DB_PASSWORD || 'NuevaPasswordSegura';
+
+        const cmd = `pg_dump -h ${dbHost} -p ${dbPort} -U ${dbUser} -d ${dbName} -F p -f "${backupPath}"`;
+
+        exec(cmd, { env: { ...process.env, PGPASSWORD: dbPassword }, timeout: 60000 }, async (error, stdout, stderr) => {
+          if (error || !fs.existsSync(backupPath)) {
+            console.error('pg_dump error:', error || stderr);
+            return res.status(500).json({
+              success: false,
+              message: 'No se pudo generar el respaldo: pg_dump no está disponible en el entorno o falló la conexión con la base de datos.',
+              error: error ? error.message : stderr
+            });
+          }
+
+          const stats = fs.statSync(backupPath);
+          if (stats.size === 0) {
+            try { fs.unlinkSync(backupPath); } catch (_) {}
+            return res.status(500).json({
+              success: false,
+              message: 'El proceso de respaldo falló produciendo un archivo vacío.'
+            });
+          }
+
+          try {
+            await db.prepare(`
               INSERT INTO backups (company_id, filename, file_path, size_bytes, backup_type, status)
               VALUES (?, ?, ?, ?, 'manual', 'completed')
-            `);
-            await stmt.run(companyId, filename, backupPath, stats.size);
+            `).run(companyId, filename, backupPath, stats.size);
 
             logAudit({
               companyId,
@@ -477,23 +580,17 @@ const adminController = {
               module: 'system',
               action: 'backup_created',
               newValues: { filename, size: stats.size },
-              description: `Copia de seguridad creada exitosamente: ${filename} (${(stats.size / 1024).toFixed(1)} KB)`
+              description: `Copia de seguridad real de PostgreSQL creada: ${filename} (${(stats.size / 1024).toFixed(1)} KB)`
             });
 
             return res.json({
               success: true,
-              message: 'Copia de seguridad generada exitosamente.',
+              message: 'Copia de seguridad de PostgreSQL generada y verificada exitosamente.',
               backup: { filename, size_bytes: stats.size, path: backupPath }
             });
-          })
-          .catch(err => {
-            return res.status(500).json({ success: false, message: 'Error generando backup.', error: err.message });
-          });
-      } else {
-        return res.json({
-          success: true,
-          message: 'PostgreSQL activo. Los respaldos se gestionan mediante pg_dump.',
-          backup: { filename: `pg_backup_${timestamp}.sql`, size_bytes: 0, path: 'PostgreSQL Server' }
+          } catch (dbErr) {
+            return res.status(500).json({ success: false, message: 'Respaldo generado pero falló el registro en la base de datos.', error: dbErr.message });
+          }
         });
       }
     } catch (err) {

@@ -14,15 +14,15 @@ router.get('/notifications', adminController.getNotifications);
 router.post('/notifications/:id/read', adminController.markNotificationRead);
 
 // Authorizations (Operaciones sensibles)
-router.get('/authorizations', adminController.getAuthorizations);
+router.get('/authorizations', requirePermission('authorizations.view'), adminController.getAuthorizations);
 router.post('/authorizations/request', adminController.requestAuthorization);
-router.post('/authorizations/:id/approve', adminController.approveAuthorization);
+router.post('/authorizations/:id/approve', requirePermission('authorizations.approve'), adminController.approveAuthorization);
 
 // Users & RBAC
-router.get('/users', adminController.getUsers);
+router.get('/users', requirePermission('users.view'), adminController.getUsers);
 router.post('/users', requirePermission('users.create'), adminController.createUser);
 router.put('/users/:id', requirePermission('users.update'), adminController.updateUser);
-router.get('/roles', adminController.getRoles);
+router.get('/roles', requirePermission('users.view'), adminController.getRoles);
 
 // Branches & Warehouses
 router.get('/branches-warehouses', adminController.getBranchesAndWarehouses);

@@ -5,10 +5,12 @@ import { useTheme } from '../context/ThemeContext';
 
 export default function LoginModal({ onLoginSuccess }) {
   const { theme, toggleTheme, isLight } = useTheme();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('Admin123!');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const isDev = import.meta.env.DEV || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'));
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
@@ -163,58 +165,60 @@ export default function LoginModal({ onLoginSuccess }) {
           </button>
         </form>
 
-        {/* Quick Demo Switcher */}
-        <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid var(--border-color)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', justifyContent: 'center' }}>
-            <Sparkles size={14} color="var(--accent-primary)" />
-            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Acceso Rápido Demo (1-Click)
-            </span>
-          </div>
+        {/* Quick Demo Switcher (Only in Local/Dev) */}
+        {isDev && (
+          <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', justifyContent: 'center' }}>
+              <Sparkles size={14} color="var(--accent-primary)" />
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Acceso Rápido Demo (1-Click)
+              </span>
+            </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleQuickLogin('admin')}
-              style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
-            >
-              👑 <strong>Super Admin</strong>
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleQuickLogin('gerente')}
-              style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
-            >
-              📊 <strong>Gerente</strong>
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleQuickLogin('cajero')}
-              style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
-            >
-              💳 <strong>Cajero (POS)</strong>
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleQuickLogin('vendedor')}
-              style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
-            >
-              🏷️ <strong>Vendedor</strong>
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleQuickLogin('almacen')}
-              style={{ gridColumn: 'span 2', justifyContent: 'center', fontSize: '0.75rem' }}
-            >
-              📦 <strong>Encargado de Almacén</strong>
-            </button>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleQuickLogin('admin')}
+                style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
+              >
+                👑 <strong>Super Admin</strong>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleQuickLogin('gerente')}
+                style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
+              >
+                📊 <strong>Gerente</strong>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleQuickLogin('cajero')}
+                style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
+              >
+                💳 <strong>Cajero (POS)</strong>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleQuickLogin('vendedor')}
+                style={{ justifyContent: 'flex-start', fontSize: '0.75rem' }}
+              >
+                🏷️ <strong>Vendedor</strong>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleQuickLogin('almacen')}
+                style={{ gridColumn: 'span 2', justifyContent: 'center', fontSize: '0.75rem' }}
+              >
+                📦 <strong>Encargado de Almacén</strong>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

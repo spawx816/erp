@@ -106,36 +106,34 @@ const cashController = {
         return res.status(400).json({ success: false, message: 'Ya tienes una sesión de caja abierta en este u otro punto.' });
       }
 
-      const sessionId = await runTransaction(async () => {
-        const stmt = await db.prepare(`
+      const sessionId = await runTransaction(async (txDb) => {
+        const resSession = await txDb.prepare(`
           INSERT INTO cash_sessions (
             cash_register_id, branch_id, user_id, initial_cash, status
           ) VALUES (?, ?, ?, ?, 'open')
-        `);
-
-        const resSession = await stmt.run(cash_register_id, branchId, userId, initial_cash);
+        `).run(cash_register_id, branchId, userId, initial_cash);
         const sId = resSession.lastInsertRowid;
 
         // Record initial deposit movement if initial cash > 0
         if (Number(initial_cash) > 0) {
-          await db.prepare(`
+          await txDb.prepare(`
             INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason)
             VALUES (?, ?, 'deposit', ?, 'Monto inicial de apertura de caja')
           `).run(sId, userId, initial_cash);
         }
 
-        logAudit({
-          companyId,
-          userId,
-          ipAddress: req.ip,
-          module: 'cash',
-          action: 'open_cash',
-          recordId: sId,
-          newValues: { cash_register_id, initial_cash },
-          description: `Apertura de turno de caja registradora ID ${cash_register_id} con monto inicial RD$ ${Number(initial_cash).toFixed(2)}`
-        });
-
         return sId;
+      });
+
+      logAudit({
+        companyId,
+        userId,
+        ipAddress: req.ip,
+        module: 'cash',
+        action: 'open_cash',
+        recordId: sessionId,
+        newValues: { cash_register_id, initial_cash },
+        description: `Apertura de turno de caja registradora ID ${cash_register_id} con monto inicial RD$ ${Number(initial_cash).toFixed(2)}`
       });
 
       return res.status(201).json({ success: true, message: 'Caja aperturada exitosamente.', session_id: sessionId });
@@ -230,8 +228,8 @@ const cashController = {
         });
       }
 
-      await runTransaction(async () => {
-        await db.prepare(`
+      await runTransaction(async (txDb) => {
+        await txDb.prepare(`
           UPDATE cash_sessions
           SET status = 'closed',
               closed_at = CURRENT_TIMESTAMP,
@@ -250,17 +248,17 @@ const cashController = {
           total_card, total_transfer, total_check, total_credit,
           session_id, finalNotes, session_id
         );
+      });
 
-        logAudit({
-          companyId,
-          userId,
-          ipAddress: req.ip,
-          module: 'cash',
-          action: 'close_cash',
-          recordId: session_id,
-          newValues: { expectedCash, counted, cashDifference, close_notes },
-          description: `Cierre y arqueo de caja #${session.cash_register_id}. Esperado: RD$ ${expectedCash.toFixed(2)}, Contado: RD$ ${counted.toFixed(2)}, Dif: RD$ ${cashDifference.toFixed(2)}`
-        });
+      logAudit({
+        companyId,
+        userId,
+        ipAddress: req.ip,
+        module: 'cash',
+        action: 'close_cash',
+        recordId: session_id,
+        newValues: { expectedCash, counted, cashDifference, close_notes: finalNotes },
+        description: `Cierre y arqueo de caja #${session.cash_register_id}. Esperado: RD$ ${expectedCash.toFixed(2)}, Contado: RD$ ${counted.toFixed(2)}, Dif: RD$ ${cashDifference.toFixed(2)}`
       });
 
       return res.json({

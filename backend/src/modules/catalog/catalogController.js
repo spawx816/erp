@@ -186,8 +186,8 @@ const catalogController = {
         return res.status(400).json({ success: false, message: `Ya existe un producto con el SKU: ${sku}` });
       }
 
-      const newProduct = await runTransaction(async () => {
-        const stmt = db.prepare(`
+      const newProduct = await runTransaction(async (txDb) => {
+        const stmt = txDb.prepare(`
           INSERT INTO products (
             company_id, category_id, brand_id, unit_id, internal_code, sku, barcode,
             name, description, type, cost, price, min_price, tax_rate,
@@ -206,7 +206,7 @@ const catalogController = {
 
         // Insert variants if supplied
         if (variants && variants.length > 0) {
-          const stmtVar = db.prepare(`
+          const stmtVar = txDb.prepare(`
             INSERT INTO product_variants (product_id, variant_name, sku, barcode, cost, price)
             VALUES (?, ?, ?, ?, ?, ?)
           `);
@@ -217,14 +217,14 @@ const catalogController = {
 
         // If initial stock provided
         if (type === 'physical' && initial_warehouse_id && Number(initial_stock) > 0) {
-          const warehouse = await db.prepare('SELECT branch_id FROM warehouses WHERE id = ?').get(initial_warehouse_id);
+          const warehouse = await txDb.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(initial_warehouse_id, companyId);
           if (warehouse) {
-            await db.prepare(`
+            await txDb.prepare(`
               INSERT INTO inventories (company_id, branch_id, warehouse_id, product_id, quantity)
               VALUES (?, ?, ?, ?, ?)
             `).run(companyId, warehouse.branch_id, initial_warehouse_id, productId, initial_stock);
 
-            await db.prepare(`
+            await txDb.prepare(`
               INSERT INTO inventory_movements (
                 company_id, branch_id, warehouse_id, product_id, user_id, movement_type,
                 previous_quantity, quantity, new_quantity, unit_cost, total_cost, reference_type, reason
@@ -236,18 +236,18 @@ const catalogController = {
           }
         }
 
-        logAudit({
-          companyId,
-          userId: req.user.id,
-          ipAddress: req.ip,
-          module: 'catalog',
-          action: 'create_product',
-          recordId: productId,
-          newValues: { name, sku, price, cost },
-          description: `Creación del producto ${name} (${sku})`
-        });
-
         return productId;
+      });
+
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip,
+        module: 'catalog',
+        action: 'create_product',
+        recordId: newProduct,
+        newValues: { name, sku, price, cost },
+        description: `Creación del producto ${name} (${sku})`
       });
 
       return res.status(201).json({ success: true, message: 'Producto creado exitosamente.', product_id: newProduct });

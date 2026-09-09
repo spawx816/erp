@@ -24,9 +24,10 @@ const authController = {
       `).get(username, username);
 
       if (!user) {
-        // Auto-seed demo dataset if table is empty
-        try {
-          const countRow = await db.prepare('SELECT COUNT(*) as count FROM users').get();
+        // Auto-seed demo dataset ONLY in non-production environments if table is empty
+        if (process.env.NODE_ENV !== 'production') {
+          try {
+            const countRow = await db.prepare('SELECT COUNT(*) as count FROM users').get();
           if (!countRow || Number(countRow.count) === 0) {
             await db.prepare(`INSERT INTO companies (id, name, legal_name, tax_id) VALUES (1, 'Nexus Distribuciones SRL', 'Nexus Distribuciones SRL', '131-99887-1') ON CONFLICT (id) DO NOTHING`).run();
             await db.prepare(`INSERT INTO branches (id, company_id, name, code, is_main) VALUES (1, 1, 'Sucursal Principal', 'SUC-001', TRUE) ON CONFLICT (id) DO NOTHING`).run();
@@ -45,8 +46,9 @@ const authController = {
               WHERE (LOWER(u.username) = LOWER(?) OR LOWER(u.email) = LOWER(?))
             `).get(username, username);
           }
-        } catch (seedErr) {
-          console.error('Auto-seed check error:', seedErr);
+          } catch (seedErr) {
+            console.error('Auto-seed check error:', seedErr);
+          }
         }
 
         if (!user) {
@@ -59,7 +61,7 @@ const authController = {
         return res.status(403).json({ success: false, message: `Usuario inactivo o suspendido (Estado: ${userStatus}).` });
       }
 
-      const validPass = bcrypt.compareSync(password, user.password_hash) || (password === 'admin123');
+      const validPass = await bcrypt.compare(password, user.password_hash);
       if (!validPass) {
         return res.status(401).json({ success: false, message: 'Credenciales incorrectas.' });
       }

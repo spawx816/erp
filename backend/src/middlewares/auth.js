@@ -1,7 +1,12 @@
 const jwt = require('jsonwebtoken');
 const { db } = require('../database/db');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'sgc_super_secret_enterprise_jwt_key_2026';
+const JWT_SECRET = process.env.JWT_SECRET || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('CRITICAL SECURITY ERROR: JWT_SECRET environment variable must be set in production.');
+  }
+  return 'sgc_super_secret_enterprise_jwt_key_2026';
+})();
 
 async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -53,7 +58,7 @@ async function authenticateToken(req, res, next) {
     req.user = user;
     next();
   } catch (err) {
-    return res.status(403).json({ success: false, message: 'Token inválido o expirado.', error: err.message });
+    return res.status(401).json({ success: false, message: 'Token inválido o sesión expirada.' });
   }
 }
 

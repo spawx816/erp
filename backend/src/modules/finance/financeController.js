@@ -104,91 +104,128 @@ const financeController = {
         }
       }
 
-      const paymentNumber = `RC-${Date.now().toString().slice(-6)}`;
-      const paymentDate = new Date().toISOString().split('T')[0];
+      const totalAmountNum = Math.round(Number(total_amount) * 100) / 100;
+      if (isNaN(totalAmountNum) || !isFinite(totalAmountNum) || totalAmountNum <= 0) {
+        return res.status(400).json({ success: false, message: 'El monto total a cobrar debe ser un número positivo mayor a cero.' });
+      }
 
-      const paymentId = await runTransaction(async () => {
-        // 1. Insert Payment
-        const stmtPay = db.prepare(`
+      const now = new Date();
+      const ymd = now.toISOString().slice(2, 10).replace(/-/g, '');
+      const rand = Math.floor(1000 + Math.random() * 9000);
+      const paymentNumber = `RC-${ymd}-${rand}`;
+      const paymentDate = now.toISOString().split('T')[0];
+
+      const paymentId = await runTransaction(async (txDb) => {
+        // 1. Verify customer belongs to company and lock row
+        const cust = await txDb.prepare(`
+          SELECT id, current_balance FROM customers
+          WHERE id = ? AND company_id = ?
+          FOR UPDATE
+        `).get(customer_id, companyId);
+
+        if (!cust) {
+          throw new Error('Cliente no válido o no pertenece a su empresa.');
+        }
+
+        // 2. Insert Payment Record
+        const resPay = await txDb.prepare(`
           INSERT INTO receivable_payments (
             company_id, branch_id, customer_id, cash_session_id, user_id,
             payment_number, payment_date, total_amount, payment_method, reference_number, notes
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        const resPay = await stmtPay.run(
+        `).run(
           companyId, branchId, customer_id, activeSession ? activeSession.id : null, userId,
-          paymentNumber, paymentDate, total_amount, payment_method, reference_number || null, notes || null
+          paymentNumber, paymentDate, totalAmountNum, payment_method, reference_number || null, notes || null
         );
         const pId = resPay.lastInsertRowid;
 
-        // 2. Process allocations
-        let remainingToApply = Number(total_amount);
-
-        // If no explicit allocations provided, auto-apply FIFO to oldest pending invoices
+        // 3. Process allocations
+        let remainingToApply = totalAmountNum;
         let targetAllocations = allocations;
+
         if (!targetAllocations || targetAllocations.length === 0) {
-          const pendingInvoices = await db.prepare(`
+          // FIFO auto-apply to oldest pending invoices
+          const pendingInvoices = await txDb.prepare(`
             SELECT id, balance FROM accounts_receivable
-            WHERE customer_id = ? AND status != 'paid'
+            WHERE customer_id = ? AND company_id = ? AND status != 'paid' AND balance > 0
             ORDER BY due_date ASC
-          `).all(customer_id);
+            FOR UPDATE
+          `).all(customer_id, companyId);
 
           targetAllocations = [];
           for (const inv of pendingInvoices) {
             if (remainingToApply <= 0) break;
             const apply = Math.min(Number(inv.balance), remainingToApply);
             targetAllocations.push({ receivable_id: inv.id, amount_applied: apply });
-            remainingToApply -= apply;
+            remainingToApply = Math.round((remainingToApply - apply) * 100) / 100;
           }
         }
 
-        const stmtAlloc = db.prepare(`
-          INSERT INTO payment_allocations (payment_id, receivable_id, amount_applied)
-          VALUES (?, ?, ?)
-        `);
-
+        let totalAppliedSum = 0;
         for (const alloc of targetAllocations) {
-          const applied = Number(alloc.amount_applied);
-          if (applied <= 0) continue;
+          const applied = Math.round(Number(alloc.amount_applied) * 100) / 100;
+          if (isNaN(applied) || applied <= 0) continue;
 
-          await stmtAlloc.run(pId, alloc.receivable_id, applied);
+          // Lock and verify receivable ownership and company
+          const ar = await txDb.prepare(`
+            SELECT id, balance, status FROM accounts_receivable
+            WHERE id = ? AND company_id = ? AND customer_id = ?
+            FOR UPDATE
+          `).get(alloc.receivable_id, companyId, customer_id);
+
+          if (!ar) {
+            throw new Error(`Cuenta por cobrar ID ${alloc.receivable_id} no pertenece a este cliente o empresa.`);
+          }
+
+          if (applied > Number(ar.balance) + 0.01) {
+            throw new Error(`El monto aplicado (RD$ ${applied}) excede el saldo pendiente (RD$ ${ar.balance}) del documento.`);
+          }
+
+          await txDb.prepare(`
+            INSERT INTO payment_allocations (payment_id, receivable_id, amount_applied)
+            VALUES (?, ?, ?)
+          `).run(pId, alloc.receivable_id, applied);
 
           // Update receivable balance
-          const ar = await db.prepare('SELECT balance FROM accounts_receivable WHERE id = ?').get(alloc.receivable_id);
-          const newBal = Math.max(0, Number(ar.balance) - applied);
-          const newStatus = newBal === 0 ? 'paid' : 'partial';
+          const newBal = Math.max(0, Math.round((Number(ar.balance) - applied) * 100) / 100);
+          const newStatus = newBal <= 0.01 ? 'paid' : 'partial';
 
-          await db.prepare(`
+          await txDb.prepare(`
             UPDATE accounts_receivable
-            SET balance = ?, status = ?
+            SET balance = ?, status = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).run(newBal, newStatus, alloc.receivable_id);
+
+          totalAppliedSum = Math.round((totalAppliedSum + applied) * 100) / 100;
         }
 
-        // 3. Deduct customer balance
-        await db.prepare('UPDATE customers SET current_balance = MAX(0, current_balance - ?) WHERE id = ?').run(total_amount, customer_id);
+        // 4. Deduct customer balance using PostgreSQL native GREATEST
+        await txDb.prepare(`
+          UPDATE customers
+          SET current_balance = GREATEST(0, current_balance - ?), updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(totalAmountNum, customer_id);
 
-        // 4. If cash, record cash movement
+        // 5. If cash, record cash movement
         if (payment_method === 'cash' && activeSession) {
-          await db.prepare(`
+          await txDb.prepare(`
             INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
             VALUES (?, ?, 'cxc_payment', ?, ?, 'receivable_payments', ?)
-          `).run(activeSession.id, userId, total_amount, `Cobro CxC Recibo #${paymentNumber}`, pId);
+          `).run(activeSession.id, userId, totalAmountNum, `Cobro CxC Recibo #${paymentNumber}`, pId);
         }
 
-        logAudit({
-          companyId,
-          userId,
-          ipAddress: req.ip,
-          module: 'finance',
-          action: 'cxc_payment',
-          recordId: pId,
-          newValues: { payment_number: paymentNumber, total_amount, payment_method },
-          description: `Cobro a cliente registrado ${paymentNumber} por RD$ ${Number(total_amount).toFixed(2)}`
-        });
-
         return pId;
+      });
+
+      logAudit({
+        companyId,
+        userId,
+        ipAddress: req.ip,
+        module: 'finance',
+        action: 'cxc_payment',
+        recordId: paymentId,
+        newValues: { payment_number: paymentNumber, total_amount: totalAmountNum, payment_method },
+        description: `Cobro a cliente registrado ${paymentNumber} por RD$ ${totalAmountNum.toFixed(2)}`
       });
 
       return res.status(201).json({ success: true, message: 'Pago registrado exitosamente.', payment_id: paymentId, payment_number: paymentNumber });
@@ -245,48 +282,56 @@ const financeController = {
       const userId = req.user.id;
       const { payable_id, amount, payment_method = 'transfer', reference_number, notes } = req.body;
 
-      if (!payable_id || !amount || Number(amount) <= 0) {
-        return res.status(400).json({ success: false, message: 'Cuenta por pagar y monto requeridos.' });
+      const amt = Math.round(Number(amount) * 100) / 100;
+      if (isNaN(amt) || !isFinite(amt) || amt <= 0) {
+        return res.status(400).json({ success: false, message: 'El monto a pagar debe ser un número positivo mayor a cero.' });
       }
 
-      const payable = await db.prepare('SELECT * FROM accounts_payable WHERE id = ? AND company_id = ?').get(payable_id, companyId);
-      if (!payable) return res.status(404).json({ success: false, message: 'Cuenta por pagar no encontrada.' });
+      await runTransaction(async (txDb) => {
+        const payable = await txDb.prepare(`
+          SELECT * FROM accounts_payable
+          WHERE id = ? AND company_id = ?
+          FOR UPDATE
+        `).get(payable_id, companyId);
 
-      const amt = Number(amount);
-      if (amt > Number(payable.balance)) {
-        return res.status(400).json({ success: false, message: `El monto excede el saldo pendiente (${payable.balance}).` });
-      }
+        if (!payable) throw new Error('Cuenta por pagar no encontrada.');
 
-      await runTransaction(async () => {
+        if (amt > Number(payable.balance) + 0.01) {
+          throw new Error(`El monto (RD$ ${amt}) excede el saldo pendiente (${payable.balance}).`);
+        }
+
         const paymentDate = new Date().toISOString().split('T')[0];
 
-        await db.prepare(`
+        await txDb.prepare(`
           INSERT INTO payable_payments (payable_id, company_id, user_id, payment_date, amount, payment_method, reference_number, notes)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(payable_id, companyId, userId, paymentDate, amt, payment_method, reference_number || null, notes || null);
 
-        const newBal = Number(payable.balance) - amt;
+        const newBal = Math.max(0, Math.round((Number(payable.balance) - amt) * 100) / 100);
         const newStatus = newBal <= 0.01 ? 'paid' : 'partial';
 
-        await db.prepare(`
+        await txDb.prepare(`
           UPDATE accounts_payable
-          SET balance = ?, status = ?
+          SET balance = ?, status = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).run(newBal, newStatus, payable_id);
 
-        // Update supplier balance
-        await db.prepare('UPDATE suppliers SET current_balance = MAX(0, current_balance - ?) WHERE id = ?').run(amt, payable.supplier_id);
+        // Update supplier balance using native GREATEST
+        await txDb.prepare(`
+          UPDATE suppliers
+          SET current_balance = GREATEST(0, current_balance - ?), updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(amt, payable.supplier_id);
+      });
 
-        logAudit({
-          companyId,
-          userId,
-          ipAddress: req.ip,
-          module: 'finance',
-          action: 'cxp_payment',
-          recordId: payable_id,
-          newValues: { amount: amt, payment_method },
-          description: `Pago a proveedor por RD$ ${amt.toFixed(2)} a documento ${payable.document_number}`
-        });
+      logAudit({
+        companyId,
+        userId,
+        ipAddress: req.ip,
+        module: 'finance',
+        action: 'cxp_payment',
+        recordId: payable_id,
+        newValues: { amount: amt, payment_method },
       });
 
       return res.json({ success: true, message: 'Pago a proveedor aplicado exitosamente.' });
@@ -345,49 +390,53 @@ const financeController = {
 
       const { category_id, amount, payment_method = 'cash', beneficiary, voucher_number, notes } = req.body;
 
-      if (!category_id || !amount) {
-        return res.status(400).json({ success: false, message: 'Categoría y monto son obligatorios.' });
+      const amountNum = Math.round(Number(amount) * 100) / 100;
+      if (!category_id || isNaN(amountNum) || !isFinite(amountNum) || amountNum <= 0) {
+        return res.status(400).json({ success: false, message: 'Categoría y un monto numérico positivo mayor a cero son obligatorios.' });
       }
 
       let activeSession = null;
       if (payment_method === 'cash') {
         activeSession = await db.prepare("SELECT id FROM cash_sessions WHERE user_id = ? AND branch_id = ? AND status = 'open'").get(userId, branchId);
+        if (!activeSession) {
+          return res.status(400).json({ success: false, message: 'Se requiere una sesión de caja abierta para registrar gastos en efectivo.' });
+        }
       }
 
       const expenseDate = new Date().toISOString().split('T')[0];
 
-      await runTransaction(async () => {
-        const stmt = await db.prepare(`
+      const expId = await runTransaction(async (txDb) => {
+        const resExp = await txDb.prepare(`
           INSERT INTO expenses (
             company_id, branch_id, category_id, user_id, cash_session_id,
             amount, payment_method, beneficiary, voucher_number, notes, expense_date
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        const resExp = await stmt.run(
+        `).run(
           companyId, branchId, category_id, userId, activeSession ? activeSession.id : null,
-          amount, payment_method, beneficiary || null, voucher_number || null, notes || null, expenseDate
+          amountNum, payment_method, beneficiary || null, voucher_number || null, notes || null, expenseDate
         );
-        const expId = resExp.lastInsertRowid;
+        const newExpId = resExp.lastInsertRowid;
 
         // If cash, deduct from active session
         if (payment_method === 'cash' && activeSession) {
-          await db.prepare(`
+          await txDb.prepare(`
             INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
             VALUES (?, ?, 'expense', ?, ?, 'expenses', ?)
-          `).run(activeSession.id, userId, amount, `Gasto: ${notes || beneficiary || 'Salida de caja'}`, expId);
+          `).run(activeSession.id, userId, amountNum, `Gasto: ${notes || beneficiary || 'Salida de caja'}`, newExpId);
         }
 
-        logAudit({
-          companyId,
-          userId,
-          ipAddress: req.ip,
-          module: 'finance',
-          action: 'create_expense',
-          recordId: expId,
-          newValues: { category_id, amount, payment_method },
-          description: `Gasto registrado por RD$ ${Number(amount).toFixed(2)}`
-        });
+        return newExpId;
+      });
+
+      logAudit({
+        companyId,
+        userId,
+        ipAddress: req.ip,
+        module: 'finance',
+        action: 'create_expense',
+        recordId: expId,
+        newValues: { category_id, amount: amountNum, payment_method },
+        description: `Gasto registrado por RD$ ${amountNum.toFixed(2)}`
       });
 
       return res.status(201).json({ success: true, message: 'Gasto registrado exitosamente.' });
@@ -613,19 +662,19 @@ const financeController = {
       curDue.setMonth(curDue.getMonth() + 1);
       const nextDueStr = curDue.toISOString().split('T')[0];
 
-      await runTransaction(async () => {
+      await runTransaction(async (txDb) => {
         // Register in expenses
-        await db.prepare(`
+        await txDb.prepare(`
           INSERT INTO expenses (company_id, category_id, user_id, amount, payment_method, beneficiary, voucher_number, notes, expense_date)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(companyId, recurring.category_id, req.user.id, recurring.estimated_amount, payment_method, recurring.responsible_person, voucher_number || null, notes || `Pago recurrente: ${recurring.concept}`, today);
 
         // Update recurring obligation
-        await db.prepare(`
+        await txDb.prepare(`
           UPDATE recurring_expenses
           SET last_paid_date = ?, next_due_date = ?, status = 'pending'
-          WHERE id = ?
-        `).run(today, nextDueStr, id);
+          WHERE id = ? AND company_id = ?
+        `).run(today, nextDueStr, id, companyId);
       });
 
       return res.json({ success: true, message: 'Pago de obligación registrado y siguiente vencimiento agendado.', next_due_date: nextDueStr });

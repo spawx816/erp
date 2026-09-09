@@ -28,7 +28,14 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Database files (local dev sqlite)
+# Database files & backups
+*.sqlite
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
+*.db
+*.dump
+*.backup
+*.sql.gz
+backups/
+backend/data/
