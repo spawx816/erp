@@ -7,7 +7,7 @@ async function request(endpoint, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    ...(activeBranchId ? { 'x-branch-id': activeBranchId } : {}),
+    ...(activeBranchId && activeBranchId !== 'undefined' && activeBranchId !== 'null' ? { 'x-branch-id': activeBranchId } : {}),
     ...options.headers
   };
 

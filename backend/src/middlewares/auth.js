@@ -53,13 +53,14 @@ async function authenticateToken(req, res, next) {
     user.permissions = permissions;
     
     // If client supplied custom branch header, verify authorization
-    const customBranchId = req.headers['x-branch-id'];
-    if (customBranchId) {
+    const customBranchHeader = req.headers['x-branch-id'];
+    const customBranchId = parseInt(customBranchHeader, 10);
+    if (!isNaN(customBranchId) && customBranchId > 0) {
       const branchAuth = await db.prepare(`
         SELECT branch_id FROM user_branches WHERE user_id = ? AND branch_id = ?
       `).get(user.id, customBranchId);
-      if (branchAuth || user.role_slug === 'super-admin') {
-        user.branch_id = parseInt(customBranchId, 10);
+      if (branchAuth || user.role_slug === 'super-admin' || user.role_slug === 'admin') {
+        user.branch_id = customBranchId;
       }
     }
 

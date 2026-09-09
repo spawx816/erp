@@ -9,7 +9,7 @@ const salesController = {
   getSales: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const { search, customer_id, branch_id, status, sale_type, start_date, end_date, page = 1, limit = 50 } = req.query;
+      const { search, customer_id, branch_id, salesperson_id, fiscal_type_code, status, sale_type, start_date, end_date, page = 1, limit = 50 } = req.query;
       const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
       const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
       const offset = (parsedPage - 1) * parsedLimit;
@@ -24,6 +24,14 @@ const salesController = {
       if (customer_id) {
         whereClauses.push('s.customer_id = ?');
         params.push(customer_id);
+      }
+      if (salesperson_id) {
+        whereClauses.push('s.salesperson_id = ?');
+        params.push(salesperson_id);
+      }
+      if (fiscal_type_code) {
+        whereClauses.push('s.fiscal_type_code = ?');
+        params.push(fiscal_type_code);
       }
       if (status) {
         whereClauses.push('s.status = ?');
@@ -42,19 +50,25 @@ const salesController = {
         params.push(end_date);
       }
       if (search) {
-        whereClauses.push('(s.sale_number LIKE ? OR s.ncf LIKE ? OR c.company_name LIKE ? OR c.first_name LIKE ?)');
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+        whereClauses.push('(s.sale_number LIKE ? OR s.ncf LIKE ? OR c.company_name LIKE ? OR c.first_name LIKE ? OR c.tax_id LIKE ? OR c.id_card LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
       }
 
       const whereSQL = whereClauses.join(' AND ');
 
-      const countRow = await db.prepare(`
-        SELECT COUNT(*) as total
+      const summaryRow = await db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          COALESCE(SUM(CASE WHEN s.status != 'cancelled' THEN s.total ELSE 0 END), 0) as total_active_amount,
+          COUNT(CASE WHEN s.sale_type = 'cash' AND s.status != 'cancelled' THEN 1 END) as cash_count,
+          COUNT(CASE WHEN s.sale_type = 'credit' AND s.status != 'cancelled' THEN 1 END) as credit_count,
+          COUNT(CASE WHEN s.status = 'cancelled' THEN 1 END) as cancelled_count,
+          COUNT(CASE WHEN s.status != 'cancelled' THEN 1 END) as active_count
         FROM sales s
         JOIN customers c ON s.customer_id = c.id
         WHERE ${whereSQL}
       `).get(...params);
-      const count = countRow ? parseInt(countRow.total, 10) || 0 : 0;
+      const count = summaryRow ? parseInt(summaryRow.total, 10) || 0 : 0;
 
       const sales = await db.prepare(`
         SELECT s.*,
@@ -77,11 +91,19 @@ const salesController = {
       return res.json({
         success: true,
         data: sales,
+        summary: {
+          totalAmount: summaryRow ? parseFloat(summaryRow.total_active_amount) || 0 : 0,
+          cashCount: summaryRow ? parseInt(summaryRow.cash_count, 10) || 0 : 0,
+          creditCount: summaryRow ? parseInt(summaryRow.credit_count, 10) || 0 : 0,
+          cancelledCount: summaryRow ? parseInt(summaryRow.cancelled_count, 10) || 0 : 0,
+          activeCount: summaryRow ? parseInt(summaryRow.active_count, 10) || 0 : 0,
+          totalCount: count
+        },
         pagination: {
           total: count,
           page: parsedPage,
           limit: parsedLimit,
-          pages: Math.ceil(count / parsedLimit)
+          pages: Math.ceil(count / parsedLimit) || 1
         }
       });
     } catch (err) {
