@@ -7,7 +7,8 @@ import {
   Printer, Lock, Unlock, ArrowRight, RefreshCw, AlertTriangle,
   ShoppingCart, CreditCard, HandCoins, Receipt, Activity,
   TrendingUp, MessageCircle, ExternalLink, Copy, CheckCircle2,
-  Wallet, Award, PhoneCall, Sparkles, Navigation, Check
+  Wallet, Award, PhoneCall, Sparkles, Navigation, Check,
+  UserX, Power, Download
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
@@ -35,11 +36,26 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterRisk, setFilterRisk] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL'); // 'ALL' | 'active' | 'inactive'
+  const [statementViewMode, setStatementViewMode] = useState('detailed'); // 'detailed' | 'ledger'
 
   // Customer Statement State
   const [statementCustomerId, setStatementCustomerId] = useState(null);
   const [statementData, setStatementData] = useState(null);
   const [loadingStatement, setLoadingStatement] = useState(false);
+  const [statementTimeFilter, setStatementTimeFilter] = useState('all'); // 'today' | 'month' | '1year' | '3years' | 'all' | 'custom'
+  const [statementStartDate, setStatementStartDate] = useState('');
+  const [statementEndDate, setStatementEndDate] = useState('');
+  const [statementInvoiceStatus, setStatementInvoiceStatus] = useState('pending'); // 'pending' (solo vencidos/pendientes) | 'all' (todas las facturas)
+
+  // WhatsApp & Email Share Modals
+  const [showWhatsappModal, setShowWhatsappModal] = useState(false);
+  const [whatsappPhone, setWhatsappPhone] = useState('');
+  const [whatsappText, setWhatsappText] = useState('');
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailRecipient, setEmailRecipient] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
 
   // Customer 360 Drawer State
   const [customer360, setCustomer360] = useState(null);
@@ -71,6 +87,9 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     latitude: 18.4861,
     longitude: -69.9312
   });
+
+  // Supplier Reconcile State
+  const [reconcilingSuppliers, setReconcilingSuppliers] = useState(false);
 
   // New Supplier Modal
   const [showSuppModal, setShowSuppModal] = useState(false);
@@ -114,7 +133,7 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     }
   }, [activeTab, customers]);
 
-  const loadInitial = async () => {
+  async function loadInitial() {
     setLoading(true);
     try {
       const [custRes, suppRes, spRes] = await Promise.all([
@@ -148,13 +167,39 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     loadStatement(id);
   };
 
-  const loadStatement = async (id) => {
+  const formatStatementDate = (val) => {
+    if (!val) return '-';
+    if (typeof val === 'string' && val.includes('T')) {
+      val = val.split('T')[0];
+    }
+    if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val)) {
+      const [y, m, d] = val.split('-');
+      return `${d}/${m}/${y}`;
+    }
+    try {
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? String(val) : d.toLocaleDateString('es-DO');
+    } catch {
+      return String(val);
+    }
+  };
+
+  async function loadStatement(id = statementCustomerId, startDate = statementStartDate, endDate = statementEndDate, filterKey = statementTimeFilter) {
     if (!id) return;
     setLoadingStatement(true);
     try {
-      const res = await api.get(`/third-parties/customers/${id}/statement`);
-      if (res.success) {
+      const params = {};
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      if (filterKey) params.period_label = filterKey;
+
+      const res = await api.get(`/third-parties/customers/${id}/statement`, params);
+      if (res.success && res.data) {
         setStatementData(res.data);
+        if (res.data.customer) {
+          setWhatsappPhone(res.data.customer.mobile || res.data.customer.phone || '');
+          setEmailRecipient(res.data.customer.email || '');
+        }
       }
     } catch (err) {
       console.error(err);
@@ -162,6 +207,108 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     } finally {
       setLoadingStatement(false);
     }
+  };
+
+  const handleTimeFilterSelect = (filter) => {
+    setStatementTimeFilter(filter);
+    const now = new Date();
+    const toISODate = (d) => d.toISOString().split('T')[0];
+
+    let start = '';
+    let end = toISODate(now);
+
+    if (filter === 'today') {
+      start = toISODate(now);
+    } else if (filter === 'month') {
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      start = toISODate(d);
+    } else if (filter === '1year') {
+      const d = new Date();
+      d.setFullYear(d.getFullYear() - 1);
+      start = toISODate(d);
+    } else if (filter === '3years') {
+      const d = new Date();
+      d.setFullYear(d.getFullYear() - 3);
+      start = toISODate(d);
+    } else if (filter === 'all') {
+      start = '';
+      end = '';
+    }
+
+    setStatementStartDate(start);
+    setStatementEndDate(end);
+    if (statementCustomerId) {
+      loadStatement(statementCustomerId, start, end, filter);
+    }
+  };
+
+  const handleApplyCustomDates = () => {
+    if (statementCustomerId) {
+      loadStatement(statementCustomerId, statementStartDate, statementEndDate, 'custom');
+    }
+  };
+
+  const generateStatementSummaryText = () => {
+    if (!statementData || !statementData.customer) return '';
+    const cust = statementData.customer;
+    const comp = statementData.company || { name: 'Comercial Cambri SRL' };
+    const totalPend = Number(statementData.summary?.total_pendiente || statementData.summary?.current_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 });
+    const overduePend = Number(statementData.summary?.overdue_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 });
+    const invoices = (statementInvoiceStatus === 'pending' ? (statementData.open_invoices || []) : (statementData.invoices || []));
+
+    let periodLabel = 'Histórico Completo';
+    if (statementTimeFilter === 'today') periodLabel = 'Movimientos de Hoy';
+    else if (statementTimeFilter === 'month') periodLabel = 'Últimos 30 días';
+    else if (statementTimeFilter === '1year') periodLabel = 'Último Año';
+    else if (statementTimeFilter === '3years') periodLabel = 'Últimos 3 Años';
+    else if (statementTimeFilter === 'custom' && statementStartDate) periodLabel = `Período: ${statementStartDate} al ${statementEndDate || 'la fecha'}`;
+
+    let text = `*ESTADO DE CUENTA — ${comp.name.toUpperCase()}*\n`;
+    text += `Cliente: *${cust.company_name || `${cust.first_name || ''} ${cust.last_name || ''}`.trim()}*\n`;
+    text += `RNC / Cédula: ${cust.tax_id || cust.id_card || 'Final'}\n`;
+    text += `Corte: ${new Date().toLocaleDateString('es-DO')} (${periodLabel})\n\n`;
+
+    text += `📊 *RESUMEN DE SALDO:*\n`;
+    text += `• Balance Total Exigible: *RD$ ${totalPend}*\n`;
+    if (Number(statementData.summary?.overdue_balance || 0) > 0) {
+      text += `• Saldo Vencido en Mora: *RD$ ${overduePend}* (${statementData.summary?.overdue_invoices_count || 0} facturas)\n`;
+    }
+    text += `• Facturas en consulta: ${invoices.length}\n\n`;
+
+    if (invoices.length > 0) {
+      text += `📋 *DETALLE DE FACTURAS:*\n`;
+      invoices.slice(0, 10).forEach((inv, idx) => {
+        const diasText = inv.venci > 0 ? ` (${inv.venci} días vencida)` : ' (Al día)';
+        text += `${idx + 1}. *${inv.numero}* | NCF: ${inv.ncf} | Pendiente: RD$ ${Number(inv.pendiente || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}${diasText}\n`;
+      });
+      if (invoices.length > 10) {
+        text += `_... y ${invoices.length - 10} factura(s) más._\n`;
+      }
+      text += `\n`;
+    }
+
+    text += `🏦 *CUENTAS BANCARIAS PARA PAGO:*\n`;
+    text += `• Banco Popular: Corriente #784930291 (RNC: ${comp.tax_id || '131-45678-9'})\n`;
+    text += `• Banreservas: Corriente #9601249821\n`;
+    text += `• BHD León: Corriente #0821948201\n\n`;
+    text += `Por favor envíe su comprobante de pago respondiendo a este mensaje.\n`;
+    text += `Atención al Cliente: ${comp.phone || '809-555-0100'}`;
+    return text;
+  };
+
+  const handleOpenWhatsappModal = () => {
+    const text = generateStatementSummaryText();
+    setWhatsappText(text);
+    setShowWhatsappModal(true);
+  };
+
+  const handleOpenEmailModal = () => {
+    const text = generateStatementSummaryText().replace(/\*/g, '');
+    const custName = statementData?.customer?.company_name || `${statementData?.customer?.first_name || ''} ${statementData?.customer?.last_name || ''}`.trim() || 'Cliente';
+    setEmailSubject(`Estado de Cuenta - ${statementData?.company?.name || 'Comercial Cambri SRL'} - ${custName}`);
+    setEmailBody(text);
+    setShowEmailModal(true);
   };
 
   const handleToggleCreditBlock = async (id) => {
@@ -179,6 +326,24 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
       }
     } catch (err) {
       addToast(err.message || 'Error al cambiar estado de crédito.', 'error');
+    }
+  };
+
+  const handleToggleCustomerStatus = async (id) => {
+    try {
+      const res = await api.post(`/third-parties/customers/${id}/toggle-status`);
+      if (res.success) {
+        addToast(res.message, res.status === 'active' ? 'success' : 'warning');
+        setCustomers(prev => prev.map(c => c.id === id ? { ...c, status: res.status } : c));
+        if (customer360?.customer?.id === id) {
+          setCustomer360(prev => ({
+            ...prev,
+            customer: { ...prev.customer, status: res.status }
+          }));
+        }
+      }
+    } catch (err) {
+      addToast(err.message || 'Error al cambiar estado del cliente.', 'error');
     }
   };
 
@@ -204,7 +369,9 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     try {
       const res = await api.post(`/third-parties/customers/${customer360.customer.id}/collection-notes`, {
         note: newNoteText,
-        promised_payment_date: newPromiseDate || null
+        notes: newNoteText,
+        promised_payment_date: newPromiseDate || null,
+        promise_date: newPromiseDate || null
       });
       if (res.success) {
         addToast('Nota de cobranza agregada.', 'success');
@@ -307,6 +474,23 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     }
   };
 
+  const handleReconcileSuppliers = async () => {
+    setReconcilingSuppliers(true);
+    try {
+      const res = await api.post('/third-parties/suppliers/reconcile', {});
+      if (res.success) {
+        addToast(res.message, res.adjusted_count > 0 ? 'success' : 'info');
+        loadInitial();
+      } else {
+        addToast(res.message || 'Error al conciliar.', 'error');
+      }
+    } catch (err) {
+      addToast(err.message || 'Error al conciliar saldos.', 'error');
+    } finally {
+      setReconcilingSuppliers(false);
+    }
+  };
+
   const handleSelectFromRncModal = (item) => {
     if (activeTab === 'customers') {
       setCustForm({
@@ -347,6 +531,11 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     }
   };
 
+  const displayedCustomers = customers.filter(c => {
+    if (filterStatus !== 'ALL' && (c.status || 'active') !== filterStatus) return false;
+    return true;
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Top Header */}
@@ -386,10 +575,22 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
           </button>
 
           {activeTab === 'suppliers' ? (
-            <button onClick={() => { setSuppDgiiVerified(null); setShowSuppModal(true); }} className="btn btn-primary">
-              <Plus size={16} />
-              <span>Nuevo Proveedor</span>
-            </button>
+            <>
+              <button
+                onClick={handleReconcileSuppliers}
+                disabled={reconcilingSuppliers}
+                className="btn btn-secondary"
+                style={{ borderColor: 'rgba(16, 185, 129, 0.4)', color: '#10b981', gap: '6px' }}
+                title="Auditar y sincronizar saldos de proveedores contra facturas de CxP"
+              >
+                <RefreshCw size={15} className={reconcilingSuppliers ? 'spin' : ''} />
+                <span>{reconcilingSuppliers ? 'Conciliando...' : 'Conciliar Saldos CxP'}</span>
+              </button>
+              <button onClick={() => { setSuppDgiiVerified(null); setShowSuppModal(true); }} className="btn btn-primary">
+                <Plus size={16} />
+                <span>Nuevo Proveedor</span>
+              </button>
+            </>
           ) : (
             <button onClick={() => { setDgiiVerified(null); setShowCustModal(true); }} className="btn btn-primary">
               <Plus size={16} />
@@ -444,6 +645,18 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
         {/* View Mode Switcher for Customers */}
         {activeTab === 'customers' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* Status Filter */}
+            <select
+              className="select-control"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              style={{ width: '150px', height: '34px', fontSize: '0.78rem' }}
+            >
+              <option value="ALL">Todos los Estados</option>
+              <option value="active">✅ Solo Activos</option>
+              <option value="inactive">🚫 Solo Inactivos</option>
+            </select>
+
             {/* Risk Filter */}
             <select
               className="select-control"
@@ -502,12 +715,12 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: '16px' }}>
           {loading ? (
             <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px' }}>Cargando clientes...</div>
-          ) : customers.length === 0 ? (
+          ) : displayedCustomers.length === 0 ? (
             <div className="card" style={{ gridColumn: '1 / -1', padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
               No se encontraron clientes para los filtros seleccionados.
             </div>
           ) : (
-            customers.map(c => {
+            displayedCustomers.map(c => {
               const limitAmt = Number(c.credit_limit || 0);
               const balance = Number(c.current_balance || 0);
               const usedPct = limitAmt > 0 ? Math.min(100, Math.round((balance / limitAmt) * 100)) : 0;
@@ -517,6 +730,7 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
               const barColor = usedPct >= 85 || overdueCount > 0 ? '#ef4444' : usedPct >= 60 ? '#f59e0b' : '#10b981';
               const riskBadgeClass = c.risk_score === 'critical' ? 'badge-danger' : c.risk_score === 'high' ? 'badge-warning' : 'badge-success';
               const riskLabel = c.risk_score === 'critical' ? 'Riesgo Crítico' : c.risk_score === 'high' ? 'Riesgo Alto' : c.risk_score === 'medium' ? 'Riesgo Medio' : 'Riesgo Bajo';
+              const isInactive = c.status === 'inactive';
 
               return (
                 <div
@@ -528,33 +742,34 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                     flexDirection: 'column',
                     justifyContent: 'space-between',
                     gap: '14px',
-                    border: '1px solid var(--border-color)',
+                    border: `1px solid ${isInactive ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)'}`,
+                    opacity: isInactive ? 0.75 : 1,
                     transition: 'all 0.18s ease'
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.4)';
+                    e.currentTarget.style.borderColor = isInactive ? 'rgba(239, 68, 68, 0.7)' : 'rgba(59, 130, 246, 0.4)';
                     e.currentTarget.style.transform = 'translateY(-2px)';
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border-color)';
+                    e.currentTarget.style.borderColor = isInactive ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)';
                     e.currentTarget.style.transform = 'none';
                   }}
                 >
-                  {/* Top: Avatar & Name */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  {/* Top: Avatar & Name & Status */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                       <div style={{
                         width: '42px',
                         height: '42px',
                         borderRadius: '10px',
-                        background: 'var(--bg-subtle-2)',
-                        border: '1px solid var(--border-color)',
+                        background: isInactive ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-subtle-2)',
+                        border: `1px solid ${isInactive ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-color)'}`,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         fontWeight: 800,
                         fontSize: '1rem',
-                        color: '#38bdf8'
+                        color: isInactive ? '#ef4444' : '#38bdf8'
                       }}>
                         {(c.company_name || c.first_name || 'C').slice(0, 2).toUpperCase()}
                       </div>
@@ -568,9 +783,14 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                       </div>
                     </div>
 
-                    <span className={`badge ${riskBadgeClass}`} style={{ fontSize: '0.65rem' }}>
-                      {riskLabel}
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                      <span className={`badge ${isInactive ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.62rem' }}>
+                        {isInactive ? '🚫 Inactivo' : '✅ Activo'}
+                      </span>
+                      <span className={`badge ${riskBadgeClass}`} style={{ fontSize: '0.62rem' }}>
+                        {riskLabel}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Salesperson Assigned */}
@@ -597,7 +817,7 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                   </div>
 
                   {/* Action Buttons */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px' }}>
                     <button
                       onClick={() => handleOpenStatement(c.id)}
                       className="btn btn-secondary btn-sm"
@@ -613,6 +833,19 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                     >
                       <Eye size={14} />
                       <span>Ficha 360°</span>
+                    </button>
+                    <button
+                      onClick={() => handleToggleCustomerStatus(c.id)}
+                      className={`btn btn-sm ${isInactive ? 'btn-success' : 'btn-secondary'}`}
+                      style={{
+                        padding: '0 10px',
+                        height: '32px',
+                        color: isInactive ? '#ffffff' : '#ef4444',
+                        borderColor: isInactive ? 'transparent' : 'rgba(239, 68, 68, 0.3)'
+                      }}
+                      title={isInactive ? "Activar cliente" : "Desactivar cliente"}
+                    >
+                      <Power size={14} />
                     </button>
                   </div>
                 </div>
@@ -634,6 +867,7 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                 <th>Ciudad</th>
                 <th>Límite Crédito</th>
                 <th>Saldo Pendiente</th>
+                <th>Estado Cuenta</th>
                 <th>Estado Crédito</th>
                 <th>Riesgo</th>
                 <th>Acciones</th>
@@ -641,53 +875,80 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="9" style={{ textAlign: 'center', padding: '30px' }}>Cargando clientes...</td></tr>
-              ) : customers.length === 0 ? (
-                <tr><td colSpan="9" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron clientes.</td></tr>
+                <tr><td colSpan="10" style={{ textAlign: 'center', padding: '30px' }}>Cargando clientes...</td></tr>
+              ) : displayedCustomers.length === 0 ? (
+                <tr><td colSpan="10" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron clientes.</td></tr>
               ) : (
-                customers.map(c => (
-                  <tr key={c.id}>
-                    <td>
-                      <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.company_name || `${c.first_name} ${c.last_name}`}</div>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{c.code}</span>
-                    </td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{c.tax_id || c.id_card || 'Consumidor Final'}</td>
-                    <td style={{ fontWeight: 600, color: '#60a5fa' }}>{c.salesperson_name || 'Carlos Mendoza'}</td>
-                    <td>{c.city || 'Santo Domingo'}</td>
-                    <td>RD$ {Number(c.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
-                    <td style={{ fontWeight: 800, color: Number(c.current_balance) > 0 ? '#38bdf8' : 'var(--text-muted)' }}>
-                      RD$ {Number(c.current_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </td>
-                    <td>
-                      {c.is_credit_blocked === 1 ? (
-                        <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <Lock size={12} /> Bloqueado
+                displayedCustomers.map(c => {
+                  const isInactive = c.status === 'inactive';
+                  return (
+                    <tr key={c.id} style={{ opacity: isInactive ? 0.7 : 1 }}>
+                      <td>
+                        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.company_name || `${c.first_name} ${c.last_name}`}</div>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{c.code}</span>
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{c.tax_id || c.id_card || 'Consumidor Final'}</td>
+                      <td style={{ fontWeight: 600, color: '#60a5fa' }}>{c.salesperson_name || 'Carlos Mendoza'}</td>
+                      <td>{c.city || 'Santo Domingo'}</td>
+                      <td>RD$ {Number(c.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
+                      <td style={{ fontWeight: 800, color: Number(c.current_balance) > 0 ? '#38bdf8' : 'var(--text-muted)' }}>
+                        RD$ {Number(c.current_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td>
+                        {isInactive ? (
+                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <UserX size={12} /> Inactivo
+                          </span>
+                        ) : (
+                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <UserCheck size={12} /> Activo
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {c.is_credit_blocked === 1 ? (
+                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Lock size={12} /> Bloqueado
+                          </span>
+                        ) : (
+                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <ShieldCheck size={12} /> Activo
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${c.risk_score === 'critical' ? 'badge-danger' : c.risk_score === 'high' ? 'badge-warning' : 'badge-success'}`}>
+                          {c.risk_score === 'critical' ? 'Crítico' : c.risk_score === 'high' ? 'Alto' : 'Bajo'}
                         </span>
-                      ) : (
-                        <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <ShieldCheck size={12} /> Activo
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={`badge ${c.risk_score === 'critical' ? 'badge-danger' : c.risk_score === 'high' ? 'badge-warning' : 'badge-success'}`}>
-                        {c.risk_score === 'critical' ? 'Crítico' : c.risk_score === 'high' ? 'Alto' : 'Bajo'}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <button onClick={() => handleOpenStatement(c.id)} className="btn btn-secondary btn-sm" title="Ver Estado de Cuenta">
-                          <FileText size={14} />
-                          <span>Estado</span>
-                        </button>
-                        <button onClick={() => handleOpenCustomer360(c.id)} className="btn btn-primary btn-sm" title="Ver Ficha 360°">
-                          <Eye size={14} />
-                          <span>360°</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button onClick={() => handleOpenStatement(c.id)} className="btn btn-secondary btn-sm" title="Ver Estado de Cuenta">
+                            <FileText size={14} />
+                            <span>Estado</span>
+                          </button>
+                          <button onClick={() => handleOpenCustomer360(c.id)} className="btn btn-primary btn-sm" title="Ver Ficha 360°">
+                            <Eye size={14} />
+                            <span>360°</span>
+                          </button>
+                          <button
+                            onClick={() => handleToggleCustomerStatus(c.id)}
+                            className={`btn btn-sm ${isInactive ? 'btn-success' : 'btn-secondary'}`}
+                            style={{
+                              padding: '0 8px',
+                              height: '30px',
+                              color: isInactive ? '#ffffff' : '#ef4444',
+                              borderColor: isInactive ? 'transparent' : 'rgba(239, 68, 68, 0.3)'
+                            }}
+                            title={isInactive ? "Activar cliente" : "Desactivar cliente"}
+                          >
+                            <Power size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -697,48 +958,237 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
       {/* CUSTOMER STATEMENT VIEW */}
       {activeTab === 'statement' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Customer Selector & Quick Info Bar */}
-          <div className="card" style={{ padding: '16px 20px', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: '1 1 320px' }}>
-              <Users size={18} color="var(--primary)" />
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>Seleccionar Cliente:</label>
-              <select
-                className="select-control"
-                value={statementCustomerId || ''}
-                onChange={(e) => {
-                  const id = Number(e.target.value);
-                  setStatementCustomerId(id);
-                  loadStatement(id);
-                }}
-                style={{ flex: 1, minWidth: '220px', height: '38px', fontWeight: 600 }}
-              >
-                {customers.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.company_name || `${c.first_name} ${c.last_name}`} — RNC: {c.tax_id || c.id_card || 'Final'} (RD$ {Number(c.current_balance || 0).toLocaleString('es-DO')})
-                  </option>
-                ))}
-              </select>
+          {/* Print Stylesheet */}
+          <style>{`
+            @media print {
+              body * {
+                visibility: hidden !important;
+              }
+              #printable-statement, #printable-statement * {
+                visibility: visible !important;
+              }
+              #printable-statement {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                padding: 10mm 12mm !important;
+                margin: 0 !important;
+                box-shadow: none !important;
+                border: none !important;
+                background: #ffffff !important;
+                color: #000000 !important;
+              }
+              .no-print {
+                display: none !important;
+              }
+            }
+          `}</style>
+
+          {/* Customer Selector & Controls Toolbar */}
+          <div className="card no-print" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {/* Top Row: Client Selector + Main Action Buttons */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: '1 1 340px' }}>
+                <Users size={18} color="var(--primary)" />
+                <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>Cliente:</label>
+                <select
+                  className="select-control"
+                  value={statementCustomerId || ''}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    setStatementCustomerId(id);
+                    loadStatement(id);
+                  }}
+                  style={{ flex: 1, minWidth: '240px', height: '38px', fontWeight: 600 }}
+                >
+                  {customers.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.company_name || `${c.first_name} ${c.last_name}`} — RNC: {c.tax_id || c.id_card || 'Final'} (RD$ {Number(c.current_balance || 0).toLocaleString('es-DO')})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Action Buttons: WhatsApp, Correo, Imprimir / PDF, Ficha 360 */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                {/* View Mode Toggle */}
+                <div style={{ display: 'flex', background: 'var(--bg-subtle)', borderRadius: '8px', padding: '3px', border: '1px solid var(--border-color)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setStatementViewMode('detailed')}
+                    className={`btn btn-sm ${statementViewMode === 'detailed' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ gap: '6px', fontSize: '0.8rem', height: '30px' }}
+                  >
+                    <FileText size={14} />
+                    <span>Documento Oficial</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatementViewMode('ledger')}
+                    className={`btn btn-sm ${statementViewMode === 'ledger' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ gap: '6px', fontSize: '0.8rem', height: '30px' }}
+                  >
+                    <Table size={14} />
+                    <span>Libro Mayor</span>
+                  </button>
+                </div>
+
+                {/* WhatsApp Button */}
+                <button
+                  type="button"
+                  onClick={handleOpenWhatsappModal}
+                  disabled={!statementData}
+                  className="btn btn-sm"
+                  style={{
+                    gap: '6px',
+                    height: '32px',
+                    background: '#16a34a',
+                    color: '#ffffff',
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: statementData ? 'pointer' : 'not-allowed'
+                  }}
+                  title="Compartir estado de cuenta por WhatsApp"
+                >
+                  <MessageCircle size={15} />
+                  <span>WhatsApp</span>
+                </button>
+
+                {/* Email Button */}
+                <button
+                  type="button"
+                  onClick={handleOpenEmailModal}
+                  disabled={!statementData}
+                  className="btn btn-sm"
+                  style={{
+                    gap: '6px',
+                    height: '32px',
+                    background: '#0284c7',
+                    color: '#ffffff',
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: statementData ? 'pointer' : 'not-allowed'
+                  }}
+                  title="Compartir estado de cuenta por Correo Electrónico"
+                >
+                  <Mail size={15} />
+                  <span>Correo</span>
+                </button>
+
+                {/* Print / PDF Button */}
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  disabled={!statementData}
+                  className="btn btn-primary btn-sm"
+                  style={{ gap: '6px', height: '32px' }}
+                  title="Imprimir o guardar como PDF"
+                >
+                  <Printer size={15} />
+                  <span>Imprimir / PDF</span>
+                </button>
+
+                {statementCustomerId && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCustomer360(statementCustomerId)}
+                    className="btn btn-secondary btn-sm"
+                    style={{ gap: '6px', height: '32px' }}
+                  >
+                    <Eye size={15} />
+                    <span>Ficha 360°</span>
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                onClick={() => window.print()}
-                className="btn btn-secondary btn-sm"
-                style={{ gap: '6px' }}
-              >
-                <Printer size={15} />
-                <span>Imprimir Estado</span>
-              </button>
-              {statementCustomerId && (
-                <button
-                  onClick={() => handleOpenCustomer360(statementCustomerId)}
-                  className="btn btn-secondary btn-sm"
-                  style={{ gap: '6px' }}
-                >
-                  <Eye size={15} />
-                  <span>Ver Ficha 360°</span>
-                </button>
-              )}
+            {/* Bottom Row: Time Range Filters & Status Filter */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+              {/* Time Filters: Hoy, 30 Días, 1 Año, 3 Años, Completo */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Calendar size={14} /> Período:
+                </span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {[
+                    { id: 'today', label: 'Hoy' },
+                    { id: 'month', label: '30 Días' },
+                    { id: '1year', label: '1 Año' },
+                    { id: '3years', label: '3 Años' },
+                    { id: 'all', label: 'Completo (Todo)' },
+                    { id: 'custom', label: 'Personalizado' },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => handleTimeFilterSelect(tab.id)}
+                      className={`btn btn-sm ${statementTimeFilter === tab.id ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{
+                        padding: '3px 10px',
+                        fontSize: '0.78rem',
+                        height: '28px',
+                        borderRadius: '6px',
+                        fontWeight: statementTimeFilter === tab.id ? 700 : 500
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom date range picker if custom selected */}
+                {statementTimeFilter === 'custom' && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: '4px' }}>
+                    <input
+                      type="date"
+                      className="input-control"
+                      value={statementStartDate}
+                      onChange={(e) => setStatementStartDate(e.target.value)}
+                      style={{ height: '28px', fontSize: '0.78rem', padding: '0 8px', width: '130px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>a</span>
+                    <input
+                      type="date"
+                      className="input-control"
+                      value={statementEndDate}
+                      onChange={(e) => setStatementEndDate(e.target.value)}
+                      style={{ height: '28px', fontSize: '0.78rem', padding: '0 8px', width: '130px' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleApplyCustomDates}
+                      className="btn btn-primary btn-sm"
+                      style={{ height: '28px', fontSize: '0.75rem', padding: '0 8px' }}
+                    >
+                      Filtrar
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Invoices Status Toggle: Solo Pendientes/Vencidos vs Todas */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Facturas:</span>
+                <div style={{ display: 'flex', background: 'var(--bg-subtle)', borderRadius: '6px', padding: '2px', border: '1px solid var(--border-color)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setStatementInvoiceStatus('pending')}
+                    className={`btn btn-sm ${statementInvoiceStatus === 'pending' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ fontSize: '0.75rem', height: '26px', padding: '0 8px', borderRadius: '4px' }}
+                  >
+                    Solo Pendientes ({statementData?.open_invoices?.length || 0})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatementInvoiceStatus('all')}
+                    className={`btn btn-sm ${statementInvoiceStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ fontSize: '0.75rem', height: '26px', padding: '0 8px', borderRadius: '4px' }}
+                  >
+                    Todas ({statementData?.invoices?.length || 0})
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -750,63 +1200,249 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
             <div className="card" style={{ padding: '50px', textAlign: 'center', color: 'var(--text-muted)' }}>
               Seleccione un cliente para consultar su estado de cuenta.
             </div>
-          ) : (
-            <>
-              {/* Customer Header Details Banner */}
-              <div className="card" style={{ padding: '20px', background: 'var(--bg-card)', border: '1px solid rgba(59,130,246,0.2)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
-                  <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
+          ) : statementViewMode === 'detailed' ? (
+            /* OFFICIAL DETAILED STATEMENT DOCUMENT (Matching user reference image) */
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <div
+                id="printable-statement"
+                style={{
+                  width: '100%',
+                  maxWidth: '960px',
+                  backgroundColor: '#ffffff',
+                  color: '#111827',
+                  borderRadius: '6px',
+                  padding: '36px 42px',
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.18)',
+                  fontFamily: "'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+                  fontSize: '13px',
+                  lineHeight: '1.45'
+                }}
+              >
+                {/* 1. Header Section */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #e5e7eb', paddingBottom: '18px', marginBottom: '18px' }}>
+                  {/* Left: Logo & Company Title */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+                    {/* Stylized Logo Icon */}
                     <div style={{
-                      width: '54px',
-                      height: '54px',
-                      borderRadius: '14px',
-                      background: 'linear-gradient(135deg, #1e3a8a, #0284c7)',
+                      width: '46px',
+                      height: '46px',
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #0ea5e9 0%, #10b981 100%)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontWeight: 800,
-                      fontSize: '1.3rem',
-                      color: 'var(--text-primary)'
+                      color: '#ffffff',
+                      fontWeight: 900,
+                      fontSize: '1.1rem',
+                      boxShadow: '0 2px 8px rgba(14, 165, 233, 0.3)',
+                      flexShrink: 0
                     }}>
-                      {(statementData.customer.company_name || statementData.customer.first_name || 'C').slice(0, 2).toUpperCase()}
+                      4K
                     </div>
+
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                          {statementData.customer.company_name || `${statementData.customer.first_name} ${statementData.customer.last_name}`}
-                        </h3>
-                        {statementData.customer.is_credit_blocked === 1 ? (
-                          <span className="badge badge-danger"><Lock size={12} /> Crédito Bloqueado</span>
-                        ) : (
-                          <span className="badge badge-success"><ShieldCheck size={12} /> Crédito Activo</span>
-                        )}
+                      <h2 style={{ fontSize: '15px', fontWeight: 800, margin: '0 0 2px 0', color: '#111827', letterSpacing: '-0.2px' }}>
+                        {statementData.statement_title || 'ESTADO DE CUENTA POR CLIENTE (Detallado)'}
+                      </h2>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#374151', margin: '0 0 4px 0' }}>
+                        {statementData.company?.name || 'Comercial Cambri SRL'}
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                        <span><strong>RNC/Cédula:</strong> {statementData.customer.tax_id || statementData.customer.id_card || 'Consumidor Final'}</span>
-                        <span><strong>Tel:</strong> {statementData.customer.phone || 'No reg.'}</span>
-                        <span><strong>Ciudad:</strong> {statementData.customer.city || 'Santo Domingo'}</span>
-                        <span><strong>Vendedor:</strong> {statementData.customer.salesperson_name || 'Carlos Mendoza'}</span>
+                      <div style={{ fontSize: '11.5px', color: '#6b7280', fontStyle: 'normal' }}>
+                        {(() => {
+                          let periodLabel = 'Histórico completo';
+                          if (statementTimeFilter === 'today') periodLabel = 'Movimientos de hoy';
+                          else if (statementTimeFilter === 'month') periodLabel = 'Últimos 30 días';
+                          else if (statementTimeFilter === '1year') periodLabel = 'Último año';
+                          else if (statementTimeFilter === '3years') periodLabel = 'Últimos 3 años';
+                          else if (statementTimeFilter === 'custom') periodLabel = `Período: ${formatStatementDate(statementStartDate)} al ${formatStatementDate(statementEndDate) || 'la fecha'}`;
+
+                          const statusLabel = statementInvoiceStatus === 'all' ? 'Todas las facturas registradas' : 'Movs. vencidos y pendientes a la fecha';
+                          return `(${statusLabel} • ${periodLabel})`;
+                        })()}
                       </div>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '24px', textAlign: 'right' }}>
-                    <div>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Límite Aprobado</span>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        RD$ {Number(statementData.customer.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                      </div>
+                  {/* Right: Timestamp, Page, User */}
+                  <div style={{ textAlign: 'right', fontSize: '11.5px', color: '#4b5563', lineHeight: '1.5' }}>
+                    <div style={{ fontWeight: 600, color: '#111827' }}>
+                      {statementData.generated_at || new Date().toLocaleString('es-DO')}
                     </div>
                     <div>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Días Crédito</span>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#60a5fa' }}>
-                        {statementData.customer.credit_days || 30} días
-                      </div>
+                      Página {statementData.page_number || 1}
+                    </div>
+                    <div style={{ fontWeight: 700, letterSpacing: '0.2px', color: '#374151', marginTop: '2px' }}>
+                      {statementData.company?.name ? statementData.company.name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 14).toUpperCase() : 'COMERCIALCAM'}\{statementData.generated_by || 'ADMIN'}
                     </div>
                   </div>
                 </div>
-              </div>
 
+                {/* 2. Customer Metadata Block */}
+                <div style={{
+                  backgroundColor: '#f9fafb',
+                  border: '1px solid #f3f4f6',
+                  borderRadius: '4px',
+                  padding: '12px 16px',
+                  marginBottom: '20px',
+                  display: 'grid',
+                  gridTemplateColumns: '1.1fr 1fr',
+                  gap: '8px 24px',
+                  fontSize: '12.5px'
+                }}>
+                  {/* Row 1 Left: Cliente */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                    <span style={{ fontWeight: 700, color: '#111827', minWidth: '55px' }}>Cliente:</span>
+                    <span style={{
+                      fontWeight: 800,
+                      color: '#047857',
+                      background: '#ecfdf5',
+                      padding: '1px 6px',
+                      borderRadius: '3px',
+                      fontFamily: 'monospace'
+                    }}>
+                      {statementData.customer.code || statementData.customer.id}
+                    </span>
+                    <span style={{ fontWeight: 700, color: '#111827', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                      {statementData.customer.company_name || `${statementData.customer.first_name || ''} ${statementData.customer.last_name || ''}`.trim() || 'CLIENTE COMERCIAL'}
+                    </span>
+                  </div>
+
+                  {/* Row 1 Right: Dirección */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                    <span style={{ fontWeight: 700, color: '#111827', minWidth: '65px' }}>Dirección:</span>
+                    <span style={{ color: '#374151', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                      {statementData.customer.address || 'Gazcue, Santo Domingo'}
+                    </span>
+                  </div>
+
+                  {/* Row 2 Left: RNC & Teléfono */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontWeight: 700, color: '#111827' }}>RNC:</span>
+                      <span style={{ fontWeight: 700, color: '#1f2937', fontFamily: 'monospace' }}>
+                        {statementData.customer.tax_id || statementData.customer.id_card || '130-99881-2'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontWeight: 700, color: '#111827' }}>Teléfono:</span>
+                      <span style={{ color: '#374151' }}>
+                        {statementData.customer.phone || statementData.customer.mobile || '809 688 4455'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Row 2 Right: Contacto */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontWeight: 700, color: '#111827', minWidth: '65px' }}>Contacto:</span>
+                    <span style={{ color: '#374151', fontWeight: 600, textTransform: 'uppercase' }}>
+                      {statementData.customer.contact_person || 'CAPILAR PROPIETARIA'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 3. Invoices Table (Exact image layout with proper date and currency formats) */}
+                <div style={{ overflowX: 'auto', marginBottom: '20px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid #111827', borderTop: '1px solid #e5e7eb' }}>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>registro</th>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>Tipo</th>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>Número</th>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>NCF</th>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>vencimiento</th>
+                        <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>Importe ($)</th>
+                        <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>pendiente ($)</th>
+                        <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: 600, color: '#111827' }}>Venci.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const invoicesToRender = statementInvoiceStatus === 'pending'
+                          ? (statementData.open_invoices || [])
+                          : (statementData.invoices || statementData.open_invoices || []);
+
+                        if (!invoicesToRender || invoicesToRender.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: '#6b7280', fontStyle: 'italic' }}>
+                                {statementInvoiceStatus === 'pending'
+                                  ? 'El cliente no tiene facturas vencidas ni saldos pendientes en el período seleccionado.'
+                                  : 'No hay facturas registradas para este cliente en el período seleccionado.'}
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return invoicesToRender.map((inv, idx) => (
+                          <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                            <td style={{ padding: '5px 4px', color: '#111827', whiteSpace: 'nowrap' }}>
+                              {formatStatementDate(inv.registro || inv.raw_registro)}
+                            </td>
+                            <td style={{ padding: '5px 4px', color: '#374151' }}>{inv.tipo || 'Factura'}</td>
+                            <td style={{ padding: '5px 4px', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap' }}>
+                              {inv.numero}
+                            </td>
+                            <td style={{ padding: '5px 4px', fontFamily: 'monospace', color: '#1f2937', whiteSpace: 'nowrap' }}>
+                              {inv.ncf}
+                            </td>
+                            <td style={{ padding: '5px 4px', color: '#111827', whiteSpace: 'nowrap' }}>
+                              {formatStatementDate(inv.vencimiento || inv.raw_vencimiento)}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '5px 4px', color: '#111827', fontVariantNumeric: 'tabular-nums' }}>
+                              {Number(inv.importe || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '5px 4px', fontWeight: 700, color: '#111827', fontVariantNumeric: 'tabular-nums' }}>
+                              {Number(inv.pendiente || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '5px 4px', color: inv.venci > 0 ? '#b91c1c' : '#059669', fontWeight: inv.venci > 0 ? 700 : 500 }}>
+                              {inv.venci > 0 ? `${inv.venci}` : '0'}
+                            </td>
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* 4. Total Footer */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '14px', borderTop: '2px solid #111827' }}>
+                  <div style={{ fontSize: '11.5px', color: '#6b7280' }}>
+                    {(() => {
+                      const count = statementInvoiceStatus === 'pending'
+                        ? (statementData.open_invoices?.length || 0)
+                        : (statementData.invoices?.length || 0);
+                      return `Total de facturas en estado: ${count}`;
+                    })()}
+                  </div>
+                  <div style={{ textAlign: 'right', minWidth: '220px' }}>
+                    <div style={{ fontSize: '11px', textTransform: 'uppercase', color: '#6b7280', fontWeight: 700, letterSpacing: '0.5px' }}>
+                      Total Pendiente Exigible
+                    </div>
+                    <div style={{ fontSize: '17px', fontWeight: 900, color: '#111827', letterSpacing: '-0.3px' }}>
+                      RD$ {Number(statementData.summary?.total_pendiente || statementData.summary?.current_balance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Banking Accounts Block for Payment (Included on Print/PDF) */}
+                <div style={{ marginTop: '28px', paddingTop: '16px', borderTop: '1px dashed #d1d5db', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', fontSize: '11.5px' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#111827', marginBottom: '4px' }}>Cuentas para Transferencias Bancarias:</div>
+                    <div style={{ color: '#4b5563' }}>• <strong>Banco Popular:</strong> Cta. Cte. #784930291</div>
+                    <div style={{ color: '#4b5563' }}>• <strong>Banreservas:</strong> Cta. Cte. #9601249821</div>
+                    <div style={{ color: '#4b5563' }}>• <strong>BHD León:</strong> Cta. Cte. #0821948201</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 700, color: '#111827', marginBottom: '4px' }}>Instrucciones de Pago:</div>
+                    <div style={{ color: '#4b5563' }}>Favor remitir comprobante a <strong>{statementData.company?.email || 'cobros@cambri.com.do'}</strong></div>
+                    <div style={{ color: '#4b5563' }}>o al WhatsApp de Cobros: <strong>{statementData.company?.phone || '809-555-0100'}</strong></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* LEDGER VIEW (Historical Debits, Credits & Running Balance) */
+            <>
               {/* 3 Summary KPI Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
                 <div className="card" style={{ padding: '18px', borderLeft: '4px solid #3b82f6' }}>
@@ -899,6 +1535,183 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                 </table>
               </div>
             </>
+          )}
+
+          {/* WhatsApp Share Modal */}
+          {showWhatsappModal && (
+            <div className="modal-overlay" style={{ zIndex: 1100 }}>
+              <div className="modal-content" style={{ maxWidth: '540px', width: '92%' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+                      <MessageCircle size={20} />
+                    </div>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>Compartir Estado por WhatsApp</h3>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Envío directo al cliente o contacto registrado</span>
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setShowWhatsappModal(false)} className="btn btn-ghost btn-sm">
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Teléfono / WhatsApp (con o sin código país):
+                    </label>
+                    <input
+                      type="text"
+                      className="input-control"
+                      value={whatsappPhone}
+                      onChange={(e) => setWhatsappPhone(e.target.value)}
+                      placeholder="Ej: 809-688-4455 o 18096884455"
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Mensaje estructurado con balance y cuentas bancarias:
+                    </label>
+                    <textarea
+                      className="input-control"
+                      rows={11}
+                      value={whatsappText}
+                      onChange={(e) => setWhatsappText(e.target.value)}
+                      style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.8rem', lineHeight: '1.4' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(whatsappText);
+                        addToast('Mensaje copiado al portapapeles.', 'success');
+                      }}
+                      className="btn btn-secondary btn-sm"
+                      style={{ gap: '6px' }}
+                    >
+                      <Copy size={14} />
+                      <span>Copiar Texto</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        let cleanPhone = String(whatsappPhone || '').replace(/[^0-9]/g, '');
+                        if (cleanPhone.length === 10 && (cleanPhone.startsWith('809') || cleanPhone.startsWith('829') || cleanPhone.startsWith('849'))) {
+                          cleanPhone = '1' + cleanPhone;
+                        }
+                        const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(whatsappText)}`;
+                        window.open(url, '_blank');
+                        setShowWhatsappModal(false);
+                      }}
+                      className="btn btn-sm"
+                      style={{ background: '#16a34a', color: '#fff', border: 'none', gap: '6px', fontWeight: 600 }}
+                    >
+                      <ExternalLink size={14} />
+                      <span>Abrir WhatsApp</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Email Share Modal */}
+          {showEmailModal && (
+            <div className="modal-overlay" style={{ zIndex: 1100 }}>
+              <div className="modal-content" style={{ maxWidth: '580px', width: '92%' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+                      <Mail size={20} />
+                    </div>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>Compartir Estado por Correo</h3>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Envío del desglose formal de cuenta por e-mail</span>
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setShowEmailModal(false)} className="btn btn-ghost btn-sm">
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Correo Electrónico Destinatario:
+                    </label>
+                    <input
+                      type="email"
+                      className="input-control"
+                      value={emailRecipient}
+                      onChange={(e) => setEmailRecipient(e.target.value)}
+                      placeholder="cliente@empresa.com"
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Asunto del Correo:
+                    </label>
+                    <input
+                      type="text"
+                      className="input-control"
+                      value={emailSubject}
+                      onChange={(e) => setEmailSubject(e.target.value)}
+                      style={{ width: '100%', fontWeight: 600 }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Cuerpo del Mensaje:
+                    </label>
+                    <textarea
+                      className="input-control"
+                      rows={10}
+                      value={emailBody}
+                      onChange={(e) => setEmailBody(e.target.value)}
+                      style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.8rem', lineHeight: '1.4' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(emailBody);
+                        addToast('Contenido copiado al portapapeles.', 'success');
+                      }}
+                      className="btn btn-secondary btn-sm"
+                      style={{ gap: '6px' }}
+                    >
+                      <Copy size={14} />
+                      <span>Copiar Contenido</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mailto = `mailto:${emailRecipient}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+                        window.open(mailto, '_blank');
+                        setShowEmailModal(false);
+                      }}
+                      className="btn btn-primary btn-sm"
+                      style={{ gap: '6px', fontWeight: 600 }}
+                    >
+                      <ExternalLink size={14} />
+                      <span>Abrir en Cliente de Correo</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -1563,9 +2376,24 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                         </div>
                         <div>
                           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Estado del Cliente</span>
-                          <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#10b981', marginTop: '2px', textTransform: 'uppercase' }}>
-                            {customer360.customer.status || 'Activo'}
-                          </p>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                            <span className={`badge ${customer360.customer.status === 'inactive' ? 'badge-danger' : 'badge-success'}`}>
+                              {customer360.customer.status === 'inactive' ? 'Inactivo' : 'Activo'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await handleToggleCustomerStatus(customer360.customer.id);
+                                handleOpenCustomer360(customer360.customer.id);
+                              }}
+                              className={`btn btn-sm ${customer360.customer.status === 'inactive' ? 'btn-success' : 'btn-secondary'}`}
+                              style={{ padding: '2px 8px', fontSize: '0.75rem', height: '26px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                              title={customer360.customer.status === 'inactive' ? "Activar cuenta del cliente" : "Desactivar cuenta del cliente"}
+                            >
+                              <Power size={12} />
+                              <span>{customer360.customer.status === 'inactive' ? 'Activar' : 'Desactivar'}</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1626,6 +2454,23 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                           ) : (
                             <><Lock size={14} /> <span>Bloquear Crédito</span></>
                           )}
+                        </button>
+                      </div>
+
+                      {/* Toggle customer account status button */}
+                      <div style={{ marginTop: '6px', paddingTop: '10px', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Cuenta de Cliente:</span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await handleToggleCustomerStatus(customer360.customer.id);
+                            handleOpenCustomer360(customer360.customer.id);
+                          }}
+                          className={`btn btn-sm ${customer360.customer.status === 'inactive' ? 'btn-success' : 'btn-secondary'}`}
+                          style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                        >
+                          <Power size={14} />
+                          <span>{customer360.customer.status === 'inactive' ? 'Activar Cliente' : 'Desactivar Cliente'}</span>
                         </button>
                       </div>
                     </div>
@@ -1950,11 +2795,13 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                             <span style={{ fontWeight: 700, color: '#60a5fa' }}>{cn.user_name || 'Oficial de Cobranzas'}</span>
                             <span>{new Date(cn.created_at).toLocaleString('es-DO')}</span>
                           </div>
-                          <p style={{ fontSize: '0.88rem', color: 'var(--text-primary)', margin: '0 0 6px' }}>{cn.note}</p>
-                          {cn.promised_payment_date && (
+                          <p style={{ fontSize: '0.9rem', color: 'var(--text-primary)', margin: '0 0 8px', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                            {cn.notes || cn.note || '(Sin detalle de texto)'}
+                          </p>
+                          {(cn.promise_date || cn.promised_payment_date) && (
                             <span className="badge badge-warning" style={{ fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                               <Calendar size={11} />
-                              Promesa de Pago para: <strong>{cn.promised_payment_date}</strong>
+                              Promesa de Pago para: <strong>{new Date(cn.promise_date || cn.promised_payment_date).toLocaleDateString('es-DO')}</strong>
                             </span>
                           )}
                         </div>

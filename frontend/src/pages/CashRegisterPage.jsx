@@ -41,6 +41,12 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
 
   useEffect(() => {
     loadData();
+
+    const handleSaleCompleted = () => {
+      loadData();
+    };
+    window.addEventListener('sgc:sale-completed', handleSaleCompleted);
+    return () => window.removeEventListener('sgc:sale-completed', handleSaleCompleted);
   }, [activeBranch]);
 
   const loadData = async () => {
@@ -80,6 +86,7 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
         toast.success('Caja aperturada exitosamente.');
         setShowOpenModal(false);
         loadData();
+        window.dispatchEvent(new CustomEvent('sgc:cash-session-changed', { detail: res.data || { id: res.session_id, status: 'open' } }));
         if (onRefreshUser) onRefreshUser();
       }
     } catch (err) {
@@ -118,6 +125,7 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
         toast.success(`Caja cerrada exitosamente. Descuadre: RD$ ${Number(res.summary?.cash_difference || 0).toFixed(2)}`);
         setShowCloseModal(false);
         loadData();
+        window.dispatchEvent(new CustomEvent('sgc:cash-session-changed', { detail: null }));
         if (onRefreshUser) onRefreshUser();
       }
     } catch (err) {

@@ -6,7 +6,7 @@ const { pool } = require('./database/pgDb');
 
 const app = express();
 
-// Trust reverse proxy (Nginx / Docker) for accurate client IP identification
+// Trust reverse proxy (Nginx) for accurate client IP identification
 app.set('trust proxy', 1);
 
 // Middlewares
@@ -57,6 +57,7 @@ app.use('/api/v1/third-parties', require('./modules/thirdParties/thirdPartiesRou
 app.use('/api/v1/inventory', require('./modules/inventory/inventoryRoutes'));
 app.use('/api/v1/purchases', require('./modules/purchases/purchasesRoutes'));
 app.use('/api/v1/sales', require('./modules/sales/salesRoutes'));
+app.use('/api/v1/orders', require('./modules/sales/ordersRoutes'));
 app.use('/api/v1/cash', require('./modules/cash/cashRoutes'));
 app.use('/api/v1/finance', require('./modules/finance/financeRoutes'));
 app.use('/api/v1/fiscal', require('./modules/fiscal/fiscalRoutes'));

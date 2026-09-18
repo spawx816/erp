@@ -202,6 +202,34 @@ const financeController = {
               SET balance = GREATEST(0, balance - ?), updated_at = CURRENT_TIMESTAMP
               WHERE id = ?
             `).run(applied, ar.sale_id);
+
+            // Accrue commission if salesperson has calculation_type === 'collected'
+            const saleData = await txDb.prepare(`
+              SELECT salesperson_id, invoice_number, total, subtotal FROM sales WHERE id = ?
+            `).get(ar.sale_id);
+
+            if (saleData && saleData.salesperson_id) {
+              const sp = await txDb.prepare(`
+                SELECT commission_rate, commission_calculation_type FROM salespeople WHERE id = ?
+              `).get(saleData.salesperson_id);
+
+              if (sp && sp.commission_calculation_type === 'collected') {
+                const rate = Number(sp.commission_rate || 5);
+                const saleTotal = Number(saleData.total || applied);
+                const ratio = saleTotal > 0 ? (applied / saleTotal) : 1;
+                const baseAmount = Math.round(Number(saleData.subtotal || applied) * ratio * 100) / 100;
+                const commAmt = Math.round((baseAmount * (rate / 100)) * 100) / 100;
+
+                if (commAmt > 0) {
+                  await txDb.prepare(`
+                    INSERT INTO commissions (
+                      company_id, salesperson_id, sale_id, payment_id, invoice_number,
+                      base_amount, commission_rate, commission_amount, calculation_type, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'collected', 'pending')
+                  `).run(companyId, saleData.salesperson_id, ar.sale_id, pId, saleData.invoice_number, baseAmount, rate, commAmt);
+                }
+              }
+            }
           }
 
           totalAppliedSum = Math.round((totalAppliedSum + applied) * 100) / 100;
@@ -271,10 +299,14 @@ const financeController = {
         SELECT ap.*,
                s.company_name as supplier_name, s.phone as supplier_phone, s.tax_id as supplier_tax_id,
                b.name as branch_name,
-               COALESCE((CURRENT_DATE - ap.due_date), 0) as days_overdue
+               COALESCE((CURRENT_DATE - ap.due_date), 0) as days_overdue,
+               COALESCE(po.order_number, po2.order_number) as purchase_order_number
         FROM accounts_payable ap
         JOIN suppliers s ON ap.supplier_id = s.id
         JOIN branches b ON ap.branch_id = b.id
+        LEFT JOIN purchase_orders po ON ap.purchase_order_id = po.id
+        LEFT JOIN purchases p ON ap.purchase_id = p.id
+        LEFT JOIN purchase_orders po2 ON p.purchase_order_id = po2.id
         WHERE ${whereClauses.join(' AND ')}
         ORDER BY ap.due_date ASC
       `).all(...params);
@@ -293,11 +325,28 @@ const financeController = {
     try {
       const companyId = req.user.company_id;
       const userId = req.user.id;
+      const branchId = req.user.branch_id;
       const { payable_id, amount, payment_method = 'transfer', reference_number, notes } = req.body;
 
       const amt = Math.round(Number(amount) * 100) / 100;
       if (isNaN(amt) || !isFinite(amt) || amt <= 0) {
         return res.status(400).json({ success: false, message: 'El monto a pagar debe ser un número positivo mayor a cero.' });
+      }
+
+      // If cash, verify open cash session
+      let activeSession = null;
+      if (payment_method === 'cash') {
+        activeSession = await db.prepare(`
+          SELECT id FROM cash_sessions
+          WHERE user_id = ? AND branch_id = ? AND status = 'open'
+        `).get(userId, branchId);
+
+        if (!activeSession) {
+          return res.status(400).json({
+            success: false,
+            message: 'Se requiere una sesión de caja abierta para registrar pagos a proveedores en efectivo.'
+          });
+        }
       }
 
       await runTransaction(async (txDb) => {
@@ -315,10 +364,29 @@ const financeController = {
 
         const paymentDate = new Date().toISOString().split('T')[0];
 
-        await txDb.prepare(`
-          INSERT INTO payable_payments (payable_id, company_id, user_id, payment_date, amount, payment_method, reference_number, notes)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(payable_id, companyId, userId, paymentDate, amt, payment_method, reference_number || null, notes || null);
+        const pRes = await txDb.prepare(`
+          INSERT INTO payable_payments (
+            payable_id, company_id, user_id, cash_session_id,
+            payment_date, amount, payment_method, reference_number, notes
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          payable_id, companyId, userId, activeSession ? activeSession.id : null,
+          paymentDate, amt, payment_method, reference_number || null, notes || null
+        );
+
+        // If cash payment, record cash movement as expense in register
+        if (payment_method === 'cash' && activeSession) {
+          await txDb.prepare(`
+            INSERT INTO cash_movements (
+              cash_session_id, user_id, type, amount, reason, reference_type, reference_id
+            ) VALUES (?, ?, 'expense', ?, ?, 'accounts_payable', ?)
+          `).run(
+            activeSession.id, userId, amt,
+            `Pago CxP Proveedor: Factura ${payable.document_number || payable_id} (${notes || 'Efectivo'})`,
+            payable_id
+          );
+        }
 
         const newBal = Math.max(0, Math.round((Number(payable.balance) - amt) * 100) / 100);
         const newStatus = newBal <= 0.01 ? 'paid' : 'partial';
@@ -462,6 +530,49 @@ const financeController = {
     try {
       const categories = await db.prepare('SELECT * FROM expense_categories WHERE company_id = ? ORDER BY name ASC').all(req.user.company_id);
       return res.json({ success: true, data: categories });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  // Soft delete expense (cancel)
+  deleteExpense: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { id } = req.params;
+
+      const expense = await db.prepare('SELECT * FROM expenses WHERE id = ? AND company_id = ?').get(id, companyId);
+      if (!expense) {
+        return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
+      }
+
+      if (expense.status === 'cancelled') {
+        return res.status(400).json({ success: false, message: 'El gasto ya se encuentra anulado.' });
+      }
+
+      await db.prepare('UPDATE expenses SET status = \'cancelled\', updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+
+      // If cash payment, reverse cash movement
+      if (expense.payment_method === 'cash' && expense.cash_session_id) {
+        await db.prepare(`
+          INSERT INTO cash_movements (cash_session_id, user_id, type, amount, reason, reference_type, reference_id)
+          VALUES (?, ?, 'expense_reversal', ?, ?, 'expenses', ?)
+        `).run(expense.cash_session_id, req.user.id, expense.amount, `Reversión de gasto anulado: ${expense.notes || expense.beneficiary || 'Gasto'}`, id);
+      }
+
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip,
+        module: 'finance',
+        action: 'cancel_expense',
+        recordId: id,
+        oldValues: { status: expense.status },
+        newValues: { status: 'cancelled' },
+        description: `Gasto anulado: ${expense.beneficiary || expense.notes || 'Gasto'} por RD$ ${Number(expense.amount).toFixed(2)}`
+      });
+
+      return res.json({ success: true, message: 'Gasto anulado exitosamente.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -615,17 +726,29 @@ const financeController = {
   createRecurringExpense: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const { concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before } = req.body;
+      const { concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before, branch_id } = req.body;
 
       if (!concept || !estimated_amount || !next_due_date) {
         return res.status(400).json({ success: false, message: 'Concepto, monto y próxima fecha son obligatorios.' });
       }
 
+      const dueDay = Number(due_day || 15);
+      if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+        return res.status(400).json({ success: false, message: 'Día de pago (due_day) debe ser un entero entre 1 y 31.' });
+      }
+
+      if (branch_id) {
+        const branchValid = await db.prepare('SELECT id FROM branches WHERE id = ? AND company_id = ?').get(branch_id, companyId);
+        if (!branchValid) {
+          return res.status(400).json({ success: false, message: 'La sucursal indicada no pertenece a su empresa.' });
+        }
+      }
+
       const stmt = await db.prepare(`
-        INSERT INTO recurring_expenses (company_id, category_id, concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, alert_days_before, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        INSERT INTO recurring_expenses (company_id, branch_id, category_id, concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, alert_days_before, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
       `);
-      const r = await stmt.run(companyId, category_id || null, concept, estimated_amount, frequency || 'monthly', due_day || 15, next_due_date, responsible_person || null, alert_days_before || 7);
+      const r = await stmt.run(companyId, branch_id || null, category_id || null, concept, estimated_amount, frequency || 'monthly', dueDay, next_due_date, responsible_person || null, alert_days_before || 7);
 
       return res.status(201).json({ success: true, message: 'Obligación recurrente configurada.', id: r.lastInsertRowid });
     } catch (err) {
@@ -637,7 +760,23 @@ const financeController = {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
-      const { concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before, status } = req.body;
+      const { concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before, status, branch_id } = req.body;
+
+      if (due_day !== undefined) {
+        const dueDay = Number(due_day);
+        if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+          return res.status(400).json({ success: false, message: 'Día de pago (due_day) debe ser un entero entre 1 y 31.' });
+        }
+      }
+
+      if (branch_id !== undefined) {
+        if (branch_id) {
+          const branchValid = await db.prepare('SELECT id FROM branches WHERE id = ? AND company_id = ?').get(branch_id, companyId);
+          if (!branchValid) {
+            return res.status(400).json({ success: false, message: 'La sucursal indicada no pertenece a su empresa.' });
+          }
+        }
+      }
 
       await db.prepare(`
         UPDATE recurring_expenses
@@ -649,9 +788,10 @@ const financeController = {
             responsible_person = COALESCE(?, responsible_person),
             category_id = COALESCE(?, category_id),
             alert_days_before = COALESCE(?, alert_days_before),
-            status = COALESCE(?, status)
+            status = COALESCE(?, status),
+            branch_id = COALESCE(?, branch_id)
         WHERE id = ? AND company_id = ?
-      `).run(concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before, status, id, companyId);
+      `).run(concept, estimated_amount, frequency, due_day, next_due_date, responsible_person, category_id, alert_days_before, status, branch_id, id, companyId);
 
       return res.json({ success: true, message: 'Obligación actualizada.' });
     } catch (err) {

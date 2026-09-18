@@ -6,6 +6,7 @@ const { loginRateLimiter } = require('../../middlewares/rateLimiter');
 
 router.post('/login', loginRateLimiter(10, 15 * 60 * 1000), authController.login);
 router.get('/me', authenticateToken, authController.me);
+router.post('/refresh', authController.refresh);
 router.post('/logout', authenticateToken, authController.logout);
 
 module.exports = router;

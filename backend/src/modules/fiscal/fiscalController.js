@@ -49,11 +49,24 @@ const fiscalController = {
 
       const cleanPrefix = prefix || fiscal_type_code;
 
+      // Check if sequence already exists for this branch + fiscal type
+      const existing = await db.prepare(
+        `SELECT id FROM fiscal_sequences WHERE branch_id = $1 AND fiscal_type_code = $2 AND company_id = $3`
+      ).get(branch_id, fiscal_type_code, companyId);
+
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          message: `Ya existe una secuencia activa de tipo ${fiscal_type_code} para esa sucursal. Edite la existente o cree una de tipo diferente.`
+        });
+      }
+
       const stmt = await db.prepare(`
         INSERT INTO fiscal_sequences (
           company_id, branch_id, fiscal_type_code, series, prefix,
           current_number, final_number, expiration_date, warning_threshold, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
+        RETURNING id
       `);
 
       const result = await stmt.run(companyId, branch_id, fiscal_type_code, series, cleanPrefix, current_number, final_number, expiration_date || null, warning_threshold);
@@ -71,6 +84,13 @@ const fiscalController = {
 
       return res.status(201).json({ success: true, message: 'Secuencia fiscal configurada correctamente.', id: result.lastInsertRowid });
     } catch (err) {
+      // Handle unique constraint violation gracefully
+      if (err.message && (err.message.includes('unique') || err.message.includes('unicidad') || err.message.includes('duplicate'))) {
+        return res.status(409).json({
+          success: false,
+          message: 'Ya existe una secuencia fiscal de ese tipo para esa sucursal. No se puede duplicar.'
+        });
+      }
       return res.status(500).json({ success: false, message: 'Error creando secuencia fiscal.', error: err.message });
     }
   },

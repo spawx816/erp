@@ -4,7 +4,8 @@ import {
   CreditCard, Banknote, ArrowRight, UserPlus, Check,
   AlertTriangle, ShieldAlert, Sparkles, Receipt,
   UserCheck, FileText, HandCoins, AlertCircle, X,
-  Phone, MapPin, DollarSign, Clock, ShieldCheck
+  Phone, MapPin, DollarSign, Clock, ShieldCheck,
+  Send, PackageCheck, ClipboardList
 } from 'lucide-react';
 import api from '../services/api';
 import ThermalReceipt from '../components/ThermalReceipt';
@@ -60,6 +61,15 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
   const customerDropdownRef = useRef(null);
 
+  // Seller flow and Orders state
+  const isSeller = user?.role_slug === 'vendedor';
+  const [loadingOrder, setLoadingOrder] = useState(false);
+  const [orderPaymentType, setOrderPaymentType] = useState('cash'); // 'cash' | 'credit'
+  const [orderCreditDays, setOrderCreditDays] = useState(30);
+  const [showImportOrderModal, setShowImportOrderModal] = useState(false);
+  const [importableOrders, setImportableOrders] = useState([]);
+  const [loadingImportOrders, setLoadingImportOrders] = useState(false);
+
   const barcodeRef = useRef(null);
 
   useEffect(() => {
@@ -114,6 +124,14 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
     } else {
       setCustomerDetails(null);
     }
+
+    const handlePaymentRecorded = () => {
+      if (selectedCustomer?.id) {
+        loadCustomerDetails(selectedCustomer.id);
+      }
+    };
+    window.addEventListener('sgc:payment-recorded', handlePaymentRecorded);
+    return () => window.removeEventListener('sgc:payment-recorded', handlePaymentRecorded);
   }, [selectedCustomer]);
 
   const loadInitialData = async () => {
@@ -218,6 +236,12 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
     setSelectedCustomer(cust);
     setIsCustomerDropdownOpen(false);
     setCustomerSearch('');
+    if (cust.tax_id) {
+      setFiscalType('B01');
+    }
+    if (Number(cust.payment_terms_days) > 0) {
+      setOrderCreditDays(Number(cust.payment_terms_days));
+    }
   };
 
   const handleClearCustomer = () => {
@@ -238,7 +262,7 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
               name: `${res.data.product_name} (${res.data.variant_name})`,
               price: res.data.price,
               cost: res.data.cost,
-              tax_rate: res.data.tax_rate,
+              tax_rate: (res.data.tax_rate !== undefined && res.data.tax_rate !== null) ? Number(res.data.tax_rate) : 18,
               type: res.data.type,
               variant_id: res.data.id
             });
@@ -278,7 +302,7 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
         name: variant ? `${product.name} (${variant.variant_name})` : product.name,
         price,
         cost,
-        tax_rate: Number(product.tax_rate || 18),
+        tax_rate: (product.tax_rate !== undefined && product.tax_rate !== null) ? Number(product.tax_rate) : 18,
         type: product.type,
         quantity: 1,
         discount_percent: 0
@@ -300,12 +324,40 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
     setCart(cart.filter(item => item.key !== key));
   };
 
-  // Calculations
-  const subtotal = cart.reduce((sum, it) => sum + (it.price * it.quantity), 0);
-  const generalDiscountAmount = subtotal * (discountPercent / 100);
-  const netSubtotal = subtotal - generalDiscountAmount;
-  const itbisTax = netSubtotal * 0.18;
-  const total = netSubtotal + itbisTax;
+  // Dynamic Calculations adhering strictly to line-item tax rates (e.g. 0% exempt, 18% standard)
+  let subtotal = 0;
+  let totalDiscount = 0;
+  let itbisTax = 0;
+  let total = 0;
+  let taxableSubtotal = 0;
+  let exemptSubtotal = 0;
+
+  cart.forEach(it => {
+    const itemQty = Number(it.quantity || 1);
+    const unitPrice = Number(it.price || 0);
+    const itemBase = Math.round(itemQty * unitPrice * 100) / 100;
+    const itemDiscPercent = discountPercent > 0 ? discountPercent : Number(it.discount_percent || 0);
+    const itemDiscAmount = Math.round(itemBase * (itemDiscPercent / 100) * 100) / 100;
+    const itemNet = Math.round((itemBase - itemDiscAmount) * 100) / 100;
+
+    const itemTaxRate = (it.tax_rate !== undefined && it.tax_rate !== null) ? Number(it.tax_rate) : 18;
+    const itemTaxAmount = Math.round(itemNet * (itemTaxRate / 100) * 100) / 100;
+    const itemTotal = Math.round((itemNet + itemTaxAmount) * 100) / 100;
+
+    subtotal = Math.round((subtotal + itemBase) * 100) / 100;
+    totalDiscount = Math.round((totalDiscount + itemDiscAmount) * 100) / 100;
+    itbisTax = Math.round((itbisTax + itemTaxAmount) * 100) / 100;
+    total = Math.round((total + itemTotal) * 100) / 100;
+
+    if (itemTaxRate > 0) {
+      taxableSubtotal = Math.round((taxableSubtotal + itemNet) * 100) / 100;
+    } else {
+      exemptSubtotal = Math.round((exemptSubtotal + itemNet) * 100) / 100;
+    }
+  });
+
+  const generalDiscountAmount = totalDiscount;
+  const netSubtotal = Math.round((subtotal - totalDiscount) * 100) / 100;
 
   // Credit check
   const custCreditLimit = Number(customerDetails?.customer?.credit_limit || selectedCustomer?.credit_limit || 0);
@@ -316,26 +368,137 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
 
   // Visual Semaphore:
   // Verde: Al día
-  // Amarillo: Facturas por vencer o crédito al 80%
-  // Rojo: Facturas vencidas o crédito excedido
+  // Amarillo: Facturas por vencer, crédito al 80% o autorización especial
+  // Rojo: Bloqueado, facturas vencidas o crédito excedido
+  const isCreditBlocked = (customerDetails?.customer?.is_credit_blocked === 1 || selectedCustomer?.is_credit_blocked === 1);
+  const requiresSpecialAuth = (customerDetails?.customer?.requires_special_auth === 1 || selectedCustomer?.requires_special_auth === 1);
+
   let semaphoreColor = '#10b981';
   let semaphoreText = 'Al Día (Crédito Disponible)';
   let semaphoreClass = 'badge-success';
 
-  if (overdueCount > 0 || custBalance > custCreditLimit) {
+  if (isCreditBlocked) {
+    semaphoreColor = '#ef4444';
+    semaphoreText = 'Crédito Bloqueado por Administración';
+    semaphoreClass = 'badge-danger';
+  } else if (overdueCount > 0 || custBalance > custCreditLimit) {
     semaphoreColor = '#ef4444';
     semaphoreText = overdueCount > 0 ? `${overdueCount} Facturas Vencidas` : 'Límite de Crédito Excedido';
     semaphoreClass = 'badge-danger';
+  } else if (requiresSpecialAuth) {
+    semaphoreColor = '#f59e0b';
+    semaphoreText = 'Requiere Autorización Especial';
+    semaphoreClass = 'badge-warning';
   } else if (custCreditLimit > 0 && (custBalance / custCreditLimit) >= 0.8) {
     semaphoreColor = '#f59e0b';
     semaphoreText = 'Crédito al 80%+ de Utilización';
     semaphoreClass = 'badge-warning';
   }
 
+  // VENDEDOR: Crear Pedido Comercial sin cobro ni caja
+  const handleCreateOrder = async () => {
+    if (cart.length === 0) {
+      addToast('Agregue al menos un producto al carrito para generar el pedido.', 'warning');
+      return;
+    }
+    if (!selectedCustomer) {
+      addToast('Debe seleccionar un cliente para registrar el pedido comercial.', 'warning');
+      return;
+    }
+
+    setLoadingOrder(true);
+    try {
+      const payload = {
+        customer_id: selectedCustomer.id,
+        warehouse_id: selectedWarehouseId || (warehouses[0]?.id),
+        fiscal_type_code: fiscalType,
+        payment_type: orderPaymentType,
+        credit_days: orderPaymentType === 'credit' ? orderCreditDays : 0,
+        discount_percent: discountPercent,
+        notes: `Pedido comercial (${orderPaymentType === 'credit' ? `A Crédito ${orderCreditDays}d` : 'Al Contado'}) generado por vendedor ${user.first_name || user.username}`,
+        items: cart.map(it => ({
+          product_id: it.product_id,
+          variant_id: it.variant_id || null,
+          quantity: it.quantity,
+          unit_price: it.price,
+          discount_percent: discountPercent
+        }))
+      };
+
+      const res = await api.post('/sales/orders', payload);
+      if (res.success) {
+        addToast(`Pedido ${res.data.orderNumber} generado exitosamente. Enviado a Gerencia para autorización.`, 'success');
+        setCart([]);
+        setDiscountPercent(0);
+        window.dispatchEvent(new CustomEvent('sgc:order-created', { detail: res.data }));
+      }
+    } catch (err) {
+      addToast(err.message || 'Error al generar el pedido comercial.', 'error');
+    } finally {
+      setLoadingOrder(false);
+    }
+  };
+
+  // CAJERO: Cargar Pedido Autorizado / Despachado al carrito
+  const loadImportableOrders = async () => {
+    setLoadingImportOrders(true);
+    try {
+      const res = await api.get('/sales/orders', { status: 'approved' });
+      const res2 = await api.get('/sales/orders', { status: 'dispatched' });
+      const combined = [...(res.data || []), ...(res2.data || [])];
+      setImportableOrders(combined);
+      setShowImportOrderModal(true);
+    } catch (err) {
+      addToast('Error al consultar pedidos autorizados.', 'error');
+    } finally {
+      setLoadingImportOrders(false);
+    }
+  };
+
+  const handleImportOrder = async (orderId) => {
+    try {
+      const res = await api.get(`/sales/orders/${orderId}`);
+      if (res.success && res.data) {
+        const ord = res.data;
+        // Select customer
+        const cust = customers.find(c => c.id === ord.customer_id) || {
+          id: ord.customer_id,
+          company_name: ord.customer_name,
+          tax_id: ord.customer_tax_id,
+          phone: ord.customer_phone
+        };
+        setSelectedCustomer(cust);
+        setSelectedWarehouseId(ord.warehouse_id);
+        setFiscalType(ord.fiscal_type_code || 'B02');
+
+        // Populate cart
+        const newCart = (ord.items || []).map(it => ({
+          product_id: it.product_id,
+          variant_id: it.variant_id || null,
+          name: it.product_name,
+          sku: it.sku || '',
+          price: Number(it.unit_price),
+          tax_rate: Number(it.tax_rate !== undefined ? it.tax_rate : 18),
+          quantity: Number(it.quantity)
+        }));
+
+        setCart(newCart);
+        setShowImportOrderModal(false);
+        addToast(`Pedido ${ord.order_number} cargado en el POS para facturación.`, 'success');
+      }
+    } catch (err) {
+      addToast('Error al importar ítems del pedido.', 'error');
+    }
+  };
+
   const handleOpenPayment = () => {
     if (cart.length === 0) return;
 
-    if (!activeSession) {
+    const requiresCash = user?.cash_requires_open_session !== undefined && user?.cash_requires_open_session !== null
+      ? (Number(user.cash_requires_open_session) === 1 || user.cash_requires_open_session === true)
+      : true;
+
+    if (requiresCash && !activeSession) {
       addToast('No hay un turno de caja abierto en esta sucursal. Debe aperturar caja antes de facturar.', 'warning');
       if (onOpenCashModal) {
         onOpenCashModal();
@@ -359,20 +522,29 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
   };
 
   const handleProcessCheckout = async () => {
-    // If credit sale, check credit available
+    // If credit sale, verify credit status via unified credit-check endpoint
     if (paymentMethod === 'credit') {
       if (!selectedCustomer) {
         addToast('Debe seleccionar un cliente con línea de crédito autorizada para ventas a crédito.', 'error');
         return;
       }
-      if (custCreditLimit <= 0) {
-        addToast('El cliente no posee línea de crédito autorizada.', 'error');
-        return;
-      }
-      if (total > custAvailable && !supervisorCreds.username) {
-        setSupervisorReason(`Monto de venta (RD$ ${total.toFixed(2)}) supera el crédito disponible (RD$ ${custAvailable.toFixed(2)}).`);
-        setShowSupervisorModal(true);
-        return;
+
+      try {
+        const checkRes = await api.get(`/third-parties/customers/${selectedCustomer.id}/credit-check?amount=${total}`);
+        if (checkRes.success && checkRes.data) {
+          const assessment = checkRes.data;
+          if (assessment.blocked) {
+            addToast(assessment.reason || 'Cliente no habilitado para operaciones a crédito.', 'error');
+            return;
+          }
+          if (assessment.needs_supervisor_auth && !supervisorCreds.username) {
+            setSupervisorReason(assessment.reason || 'Se requiere autorización de supervisor para este crédito.');
+            setShowSupervisorModal(true);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Error en verificación previa de crédito:', err);
       }
     }
 
@@ -458,6 +630,7 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
         setShowPayModal(false);
         setSupervisorCreds({ username: '', password: '' });
         if (selectedCustomer) loadCustomerDetails(selectedCustomer.id);
+        window.dispatchEvent(new CustomEvent('sgc:sale-completed', { detail: res.data }));
       }
     } catch (err) {
       if (err.requires_cash_open || (err.message && err.message.toLowerCase().includes('caja'))) {
@@ -491,11 +664,11 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
     }}>
       {/* COLUMN 1: Catalog, Barcode Scan & Search */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'hidden' }}>
-        {/* Cash Session Status Banner */}
-        {!activeSession && (
+        {/* Banner: Modo Preventa para Vendedor o Estado de Caja para Cajero */}
+        {isSeller ? (
           <div style={{
-            background: 'rgba(239, 68, 68, 0.12)',
-            border: '1px solid rgba(239, 68, 68, 0.35)',
+            background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.15), rgba(30, 58, 138, 0.2))',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
             borderRadius: '10px',
             padding: '10px 14px',
             display: 'flex',
@@ -503,17 +676,61 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
             justifyContent: 'space-between',
             gap: '12px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444', fontSize: '0.82rem', fontWeight: 600 }}>
-              <AlertTriangle size={18} />
-              <span>Caja Cerrada: No hay un turno de caja activo en esta sucursal.</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#60a5fa', fontSize: '0.82rem', fontWeight: 700 }}>
+              <Send size={18} />
+              <span>Modo Preventa Comercial: Los pedidos creados serán enviados a Gerencia para autorización y Almacén para despacho.</span>
             </div>
-            <button
-              onClick={onOpenCashModal}
-              className="btn btn-sm btn-primary"
-              style={{ background: '#ef4444', borderColor: '#ef4444', whiteSpace: 'nowrap', fontSize: '0.75rem', padding: '5px 12px', fontWeight: 700 }}
-            >
-              Abrir Turno de Caja
-            </button>
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate('orders')}
+                className="btn btn-sm btn-secondary"
+                style={{ whiteSpace: 'nowrap', fontSize: '0.75rem', padding: '5px 12px', fontWeight: 700 }}
+              >
+                Ver Mis Pedidos
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{
+            background: activeSession ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+            border: activeSession ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid rgba(239, 68, 68, 0.35)',
+            borderRadius: '10px',
+            padding: '8px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: activeSession ? '#10b981' : '#ef4444', fontSize: '0.82rem', fontWeight: 600 }}>
+              {activeSession ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+              <span>
+                {activeSession
+                  ? `Caja Abierta: Turno #${activeSession.id} (${activeSession.register_name || 'Caja Principal'})`
+                  : 'Caja Cerrada: Requiere apertura para facturar en mostrador.'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={loadImportableOrders}
+                className="btn btn-sm btn-secondary"
+                style={{ fontSize: '0.75rem', padding: '4px 10px', fontWeight: 700, borderColor: '#38bdf8', color: '#38bdf8' }}
+              >
+                <ClipboardList size={14} style={{ marginRight: '4px' }} />
+                Cargar Pedido Autorizado
+              </button>
+              {!activeSession && onNavigate && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('cash-register')}
+                  className="btn btn-sm btn-primary"
+                  style={{ background: '#ef4444', borderColor: '#ef4444', fontSize: '0.75rem', padding: '4px 10px', fontWeight: 700 }}
+                >
+                  Abrir Caja
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -944,8 +1161,15 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
             </div>
           )}
 
+          {exemptSubtotal > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              <span>Base Exenta (0% ITBIS):</span>
+              <span>RD$ {exemptSubtotal.toFixed(2)}</span>
+            </div>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            <span>ITBIS (18%):</span>
+            <span>ITBIS ({exemptSubtotal > 0 ? 'Mixto' : '18%'}):</span>
             <span>RD$ {itbisTax.toFixed(2)}</span>
           </div>
 
@@ -954,15 +1178,117 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
             <span style={{ color: '#38bdf8' }}>RD$ {total.toFixed(2)}</span>
           </div>
 
-          <button
-            onClick={handleOpenPayment}
-            disabled={cart.length === 0}
-            className="btn btn-primary"
-            style={{ width: '100%', height: '42px', fontSize: '0.95rem', marginTop: '2px' }}
-          >
-            <Banknote size={18} />
-            <span>Cobrar (RD$ {total.toFixed(2)})</span>
-          </button>
+          {isSeller ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+              {/* Selector de Condición: Contado vs Crédito */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '8px 10px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                    Condición del Pedido:
+                  </span>
+                  {orderPaymentType === 'credit' && selectedCustomer && (
+                    <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontWeight: 700 }}>
+                      Disp: RD$ {Math.max(0, Number(selectedCustomer.credit_limit || 0) - Number(selectedCustomer.current_balance || 0)).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setOrderPaymentType('cash')}
+                    className={`btn btn-sm ${orderPaymentType === 'cash' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.75rem', height: '32px', padding: '0 8px', gap: '4px' }}
+                  >
+                    <Banknote size={14} />
+                    <span>💵 Contado</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrderPaymentType('credit')}
+                    className={`btn btn-sm ${orderPaymentType === 'credit' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.75rem', height: '32px', padding: '0 8px', gap: '4px' }}
+                  >
+                    <CreditCard size={14} />
+                    <span>💳 A Crédito</span>
+                  </button>
+                </div>
+
+                {orderPaymentType === 'credit' && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed var(--border-color)' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Plazo de pago:</span>
+                    <select
+                      value={orderCreditDays}
+                      onChange={(e) => setOrderCreditDays(Number(e.target.value))}
+                      className="input-control"
+                      style={{ height: '28px', fontSize: '0.75rem', width: '120px', padding: '0 6px' }}
+                    >
+                      <option value={15}>15 días</option>
+                      <option value={30}>30 días</option>
+                      <option value={45}>45 días</option>
+                      <option value={60}>60 días</option>
+                      <option value={90}>90 días</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* Selector de Comprobante Fiscal */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255, 255, 255, 0.03)', padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)' }}>NCF SOLICITADO:</span>
+                <select
+                  value={fiscalType}
+                  onChange={(e) => setFiscalType(e.target.value)}
+                  className="input-control"
+                  style={{ height: '28px', fontSize: '0.75rem', width: '170px', padding: '0 6px' }}
+                >
+                  <option value="B02">B02 - Consumidor Final</option>
+                  <option value="B01">B01 - Crédito Fiscal</option>
+                  <option value="B14">B14 - Régimen Especial</option>
+                  <option value="B15">B15 - Gubernamental</option>
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCreateOrder}
+                disabled={cart.length === 0 || loadingOrder}
+                className="btn btn-primary"
+                style={{
+                  width: '100%',
+                  height: '46px',
+                  fontSize: '0.95rem',
+                  fontWeight: 700,
+                  marginTop: '2px',
+                  background: orderPaymentType === 'credit'
+                    ? 'linear-gradient(135deg, #0284c7, #0369a1)'
+                    : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px'
+                }}
+              >
+                <Send size={18} />
+                <span>
+                  {loadingOrder
+                    ? 'Enviando Pedido...'
+                    : `Generar Pedido ${orderPaymentType === 'credit' ? '(A Crédito)' : '(Contado)'} - RD$ ${total.toFixed(2)}`}
+                </span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleOpenPayment}
+              disabled={cart.length === 0}
+              className="btn btn-primary"
+              style={{ width: '100%', height: '42px', fontSize: '0.95rem', marginTop: '2px' }}
+            >
+              <Banknote size={18} />
+              <span>Cobrar (RD$ {total.toFixed(2)})</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1499,6 +1825,73 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
                 Autorizar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL IMPORTAR PEDIDO AUTORIZADO (PARA CAJEROS) */}
+      {showImportOrderModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px'
+        }}>
+          <div className="card" style={{ maxWidth: '650px', width: '100%', maxHeight: '80vh', overflowY: 'auto', padding: '24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <ClipboardList size={20} color="#38bdf8" />
+                <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800 }}>Pedidos Listos para Facturar</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImportOrderModal(false)}
+                className="btn btn-sm btn-secondary"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {loadingImportOrders ? (
+              <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                Cargando pedidos...
+              </div>
+            ) : importableOrders.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                No hay pedidos autorizados o despachados pendientes de facturación.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {importableOrders.map(ord => (
+                  <div
+                    key={ord.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '12px',
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color)'
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 800, color: '#38bdf8' }}>{ord.order_number}</div>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{ord.customer_name}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        Vendedor: {ord.seller_name} | Total: RD$ {Number(ord.total).toFixed(2)}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleImportOrder(ord.id)}
+                      className="btn btn-sm btn-primary"
+                      style={{ fontWeight: 700 }}
+                    >
+                      Cargar en POS
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

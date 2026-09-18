@@ -215,6 +215,17 @@ export default function SalesHistoryPage({ activeBranch }) {
 
   useEffect(() => {
     loadSales();
+
+    const handleExternalRefresh = () => {
+      loadSales();
+    };
+    window.addEventListener('sgc:sale-completed', handleExternalRefresh);
+    window.addEventListener('sgc:credit-note-created', handleExternalRefresh);
+
+    return () => {
+      window.removeEventListener('sgc:sale-completed', handleExternalRefresh);
+      window.removeEventListener('sgc:credit-note-created', handleExternalRefresh);
+    };
   }, [loadSales]);
 
   // Export to CSV
@@ -328,6 +339,7 @@ export default function SalesHistoryPage({ activeBranch }) {
         setCancelReason('Devolución de cliente');
         setActionTaken('refund_cash');
         loadSales();
+        window.dispatchEvent(new CustomEvent('sgc:credit-note-created', { detail: res.credit_note }));
       }
     } catch (err) {
       addToast(err.message || 'Error anulando venta.', 'error');

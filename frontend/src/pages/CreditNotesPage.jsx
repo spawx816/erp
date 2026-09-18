@@ -213,6 +213,17 @@ export default function CreditNotesPage({ activeBranch }) {
 
   useEffect(() => {
     loadNotes();
+
+    const handleExternalUpdate = () => {
+      loadNotes();
+    };
+    window.addEventListener('sgc:credit-note-created', handleExternalUpdate);
+    window.addEventListener('sgc:sale-completed', handleExternalUpdate);
+
+    return () => {
+      window.removeEventListener('sgc:credit-note-created', handleExternalUpdate);
+      window.removeEventListener('sgc:sale-completed', handleExternalUpdate);
+    };
   }, [activeBranch, search, filterAction, filterReturnType]);
 
   const loadNotes = async () => {

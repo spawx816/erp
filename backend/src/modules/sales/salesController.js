@@ -4,6 +4,7 @@ const InventoryService = require('../inventory/inventoryService');
 const FiscalService = require('../fiscal/fiscalService');
 const { logAudit } = require('../../middlewares/audit');
 const { generateCommercialId } = require('../../utils/idGenerator');
+const thirdPartiesController = require('../thirdParties/thirdPartiesController');
 
 const salesController = {
   getSales: async (req, res) => {
@@ -219,11 +220,14 @@ const salesController = {
         authorizedByUserId = supervisor.id;
       }
 
-      // 3. Strict Cash Session Check for POS / cash payments
+      // 3. Strict Cash Session Check for POS / cash payments (if enforced by company settings)
+      const requiresCashSession = req.user.cash_requires_open_session !== undefined && req.user.cash_requires_open_session !== null
+        ? (Number(req.user.cash_requires_open_session) === 1)
+        : true;
       const hasCashPayment = payments.some(p => p.payment_method === 'cash');
       let activeSession = null;
 
-      if (hasCashPayment || is_pos) {
+      if ((hasCashPayment || is_pos) && requiresCashSession) {
         const explicitSessionId = req.body.cash_session_id;
         if (explicitSessionId) {
           activeSession = await db.prepare(`
@@ -398,14 +402,18 @@ const salesController = {
 
         // Customer and Credit Checks locked with FOR UPDATE
         const cust = await txDb.prepare(`
-          SELECT id, salesperson_id, credit_days, credit_limit, current_balance,
-                 is_credit_blocked, requires_special_auth, allow_sales_with_overdue_invoices
+          SELECT id, company_name, code, salesperson_id, credit_days, credit_limit, current_balance,
+                 is_credit_blocked, requires_special_auth, allow_sales_with_overdue_invoices, status
           FROM customers WHERE id = ? AND company_id = ?
           FOR UPDATE
         `).get(customer_id, companyId);
 
         if (!cust) {
           throw new Error('Cliente no válido o no pertenece a esta empresa.');
+        }
+
+        if (cust.status === 'inactive') {
+          throw new Error(`El cliente [${cust.company_name || cust.code}] está INACTIVO. No se pueden procesar ventas ni facturación a clientes inactivos.`);
         }
 
         const salespersonId = cust.salesperson_id || null;
@@ -417,26 +425,20 @@ const salesController = {
 
         // Strict verification if credit is granted
         if (hasCreditPayment || balanceAmount > 0) {
-          const availableCredit = Number(cust.credit_limit || 0) - Number(cust.current_balance || 0);
+          const creditAssessment = await thirdPartiesController.evaluateCustomerCredit({
+            customerId: customer_id,
+            companyId,
+            amount: balanceAmount,
+            txDb
+          });
 
-          const overdueCheck = await txDb.prepare(`
-            SELECT COUNT(*) as cnt FROM accounts_receivable
-            WHERE customer_id = ? AND company_id = ? AND status != 'paid' AND due_date < CURRENT_DATE AND balance > 0.01
-          `).get(customer_id, companyId);
-          const hasOverdue = Number(overdueCheck?.cnt || 0) > 0;
-          const overdueBlocked = hasOverdue && (cust.allow_sales_with_overdue_invoices !== 1 && cust.allow_sales_with_overdue_invoices !== true && cust.allow_sales_with_overdue_invoices !== '1');
+          if (creditAssessment.blocked) {
+            throw new Error(creditAssessment.reason);
+          }
 
-          const creditExceeded = (balanceAmount > availableCredit && Number(cust.credit_limit || 0) > 0);
-          const needsSupervisorAuth = (cust.is_credit_blocked === 1) || creditExceeded || overdueBlocked || (cust.requires_special_auth === 1);
-
-          if (needsSupervisorAuth) {
+          if (creditAssessment.needs_supervisor_auth) {
             if (!supervisor_auth || !supervisor_auth.username || !supervisor_auth.password) {
-              let reason = 'Se requiere autorización de supervisor para facturar a crédito.';
-              if (cust.is_credit_blocked === 1) reason = 'El cliente tiene el crédito bloqueado por administración.';
-              else if (overdueBlocked) reason = 'El cliente tiene facturas vencidas impagadas.';
-              else if (creditExceeded) reason = `El crédito (RD$ ${balanceAmount.toFixed(2)}) supera el crédito disponible (RD$ ${Math.max(0, availableCredit).toFixed(2)}).`;
-
-              throw new Error(`${reason} Ingrese usuario y contraseña de supervisor.`);
+              throw new Error(`${creditAssessment.reason} Ingrese usuario y contraseña de supervisor.`);
             }
 
             const supUser = await txDb.prepare(`
@@ -504,7 +506,7 @@ const salesController = {
             await InventoryService.recordMovement({
               companyId,
               branchId,
-              warehouseId,
+              warehouseId: warehouse_id,
               productId: item.product_id,
               variantId: item.variant_id,
               userId,
@@ -556,13 +558,18 @@ const salesController = {
 
         // 11. Commission calculation for assigned salesperson
         if (salespersonId) {
-          const sp = await txDb.prepare('SELECT commission_rate FROM salespeople WHERE id = ?').get(salespersonId);
-          const rate = sp ? Number(sp.commission_rate) : 5.00;
-          const commAmt = Math.round((subtotal * (rate / 100)) * 100) / 100;
-          await txDb.prepare(`
-            INSERT INTO commissions (company_id, salesperson_id, sale_id, invoice_number, base_amount, commission_rate, commission_amount, calculation_type, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'invoiced', 'pending')
-          `).run(companyId, salespersonId, saleId, invoiceNumber, subtotal, rate, commAmt);
+          const sp = await txDb.prepare('SELECT commission_rate, commission_calculation_type FROM salespeople WHERE id = ?').get(salespersonId);
+          const commType = sp?.commission_calculation_type || 'invoiced';
+
+          if (commType === 'invoiced') {
+            const rate = sp ? Number(sp.commission_rate) : 5.00;
+            const commAmt = Math.round((subtotal * (rate / 100)) * 100) / 100;
+            await txDb.prepare(`
+              INSERT INTO commissions (company_id, salesperson_id, sale_id, invoice_number, base_amount, commission_rate, commission_amount, calculation_type, status)
+              VALUES (?, ?, ?, ?, ?, ?, ?, 'invoiced', 'pending')
+            `).run(companyId, salespersonId, saleId, invoiceNumber, subtotal, rate, commAmt);
+          }
+          // If commType === 'collected', commissions are generated proportionally upon CxC payment
         }
 
         // 12. If authorized discount was used, log it
@@ -1121,7 +1128,269 @@ const salesController = {
     }
   },
 
-  // COMMISSIONS
+  // COMMISSIONS — Monthly Summary based on collections & 70% threshold
+  getMonthlyCommissionsSummary: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const now = new Date();
+      const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const targetMonth = req.query.month ? String(req.query.month).trim() : currentMonthStr;
+      const { salesperson_id } = req.query;
+
+      let spWhere = ['sp.company_id = ?'];
+      let spParams = [companyId];
+      if (salesperson_id) {
+        spWhere.push('sp.id = ?');
+        spParams.push(salesperson_id);
+      } else {
+        spWhere.push("sp.status = 'active'");
+      }
+
+      const salespeople = await db.prepare(`
+        SELECT sp.*, u.username
+        FROM salespeople sp
+        LEFT JOIN users u ON sp.user_id = u.id
+        WHERE ${spWhere.join(' AND ')}
+        ORDER BY sp.name ASC
+      `).all(...spParams);
+
+      const summaryList = [];
+
+      for (const sp of salespeople) {
+        const goal = parseFloat(sp.monthly_goal || 200000.00);
+        const rate = parseFloat(sp.commission_rate || 5.00);
+
+        // 1. Direct cash / upfront sales collected in targetMonth
+        const cashSales = await db.prepare(`
+          SELECT s.id, s.sale_number, s.invoice_number, s.ncf, s.subtotal, s.total, s.amount_paid, s.created_at,
+                 COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name
+          FROM sales s
+          LEFT JOIN customers c ON s.customer_id = c.id
+          WHERE s.company_id = ?
+            AND s.salesperson_id = ?
+            AND s.status != 'cancelled'
+            AND (s.status = 'paid' OR s.amount_paid > 0)
+            AND (s.sale_type != 'credit' OR s.sale_type IS NULL)
+            AND strftime('%Y-%m', s.created_at) = ?
+          ORDER BY s.created_at DESC
+        `).all(companyId, sp.id, targetMonth);
+
+        const cashTotal = cashSales.reduce((acc, s) => acc + (parseFloat(s.amount_paid || s.total || 0)), 0);
+
+        // 2. CxC collections / payments received on accounts receivable in targetMonth
+        const cxcAllocations = await db.prepare(`
+          SELECT pa.id as allocation_id, pa.amount_applied, rp.id as payment_id, rp.payment_number, rp.payment_date, rp.payment_method,
+                 s.id as sale_id, s.sale_number, s.invoice_number,
+                 COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name
+          FROM payment_allocations pa
+          JOIN receivable_payments rp ON pa.payment_id = rp.id
+          JOIN accounts_receivable ar ON pa.receivable_id = ar.id
+          LEFT JOIN sales s ON ar.sale_id = s.id
+          LEFT JOIN customers c ON rp.customer_id = c.id
+          WHERE rp.company_id = ?
+            AND (s.salesperson_id = ? OR (s.salesperson_id IS NULL AND c.salesperson_id = ?))
+            AND strftime('%Y-%m', rp.payment_date) = ?
+          ORDER BY rp.payment_date DESC
+        `).all(companyId, sp.id, sp.id, targetMonth);
+
+        const cxcTotal = cxcAllocations.reduce((acc, a) => acc + parseFloat(a.amount_applied || 0), 0);
+
+        const totalCollected = Math.round((cashTotal + cxcTotal) * 100) / 100;
+        const compliancePercentage = goal > 0 ? Math.round((totalCollected / goal) * 10000) / 100 : 0;
+        const qualifies = compliancePercentage >= 70.0;
+
+        const commissionAmount = qualifies
+          ? Math.round((totalCollected * (rate / 100)) * 100) / 100
+          : 0.00;
+
+        const amountToThreshold = qualifies
+          ? 0.00
+          : Math.max(0, Math.round(((goal * 0.70) - totalCollected) * 100) / 100);
+
+        const percentageToThreshold = qualifies
+          ? 0.00
+          : Math.max(0, Math.round((70.0 - compliancePercentage) * 100) / 100);
+
+        // Check if already paid/liquidated in this month
+        const invoicePattern = `LIQ-${targetMonth}-${sp.id}%`;
+        const existingSettlement = await db.prepare(`
+          SELECT id, status, paid_at, receipt_number, commission_amount
+          FROM commissions
+          WHERE company_id = ?
+            AND salesperson_id = ?
+            AND (
+              invoice_number LIKE ?
+              OR (calculation_type = 'monthly_collected' AND strftime('%Y-%m', created_at) = ?)
+            )
+          ORDER BY created_at DESC
+          LIMIT 1
+        `).get(companyId, sp.id, invoicePattern, targetMonth);
+
+        const isPaid = existingSettlement && existingSettlement.status === 'paid';
+
+        summaryList.push({
+          salesperson_id: sp.id,
+          name: sp.name,
+          code: sp.code,
+          phone: sp.phone,
+          email: sp.email,
+          zone: sp.zone,
+          monthly_goal: goal,
+          commission_rate: rate,
+          month: targetMonth,
+          total_cash_collected: cashTotal,
+          total_cxc_collected: cxcTotal,
+          total_collected: totalCollected,
+          compliance_percentage: compliancePercentage,
+          min_threshold_percentage: 70.0,
+          qualifies,
+          commission_amount: commissionAmount,
+          amount_to_threshold: amountToThreshold,
+          percentage_to_threshold: percentageToThreshold,
+          is_paid: !!isPaid,
+          paid_at: existingSettlement ? existingSettlement.paid_at : null,
+          receipt_number: existingSettlement ? existingSettlement.receipt_number : null,
+          status: isPaid ? 'paid' : (qualifies ? 'eligible' : 'unqualified'),
+          cash_details: cashSales,
+          cxc_details: cxcAllocations
+        });
+      }
+
+      const totalGoal = summaryList.reduce((acc, s) => acc + s.monthly_goal, 0);
+      const totalCollectedCompany = summaryList.reduce((acc, s) => acc + s.total_collected, 0);
+      const totalEligibleCommissions = summaryList.filter(s => s.qualifies).reduce((acc, s) => acc + s.commission_amount, 0);
+      const eligibleCount = summaryList.filter(s => s.qualifies).length;
+      const unqualifiedCount = summaryList.filter(s => !s.qualifies).length;
+
+      return res.json({
+        success: true,
+        month: targetMonth,
+        totals: {
+          total_goal: totalGoal,
+          total_collected: totalCollectedCompany,
+          total_eligible_commissions: totalEligibleCommissions,
+          eligible_count: eligibleCount,
+          unqualified_count: unqualifiedCount,
+          total_salespeople: summaryList.length
+        },
+        data: summaryList
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error consultando liquidación de comisiones.', error: err.message });
+    }
+  },
+
+  payMonthlyCommissions: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { salesperson_ids, month, payment_method = 'transfer', notes } = req.body;
+
+      if (!Array.isArray(salesperson_ids) || salesperson_ids.length === 0) {
+        return res.status(400).json({ success: false, message: 'Debe seleccionar al menos un vendedor para liquidar comisiones.' });
+      }
+
+      const now = new Date();
+      const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const targetMonth = month ? String(month).trim() : currentMonthStr;
+      const results = [];
+      let totalPaidAll = 0;
+
+      for (const spId of salesperson_ids) {
+        const sp = await db.prepare('SELECT * FROM salespeople WHERE id = ? AND company_id = ?').get(spId, companyId);
+        if (!sp) continue;
+
+        const goal = parseFloat(sp.monthly_goal || 200000.00);
+        const rate = parseFloat(sp.commission_rate || 5.00);
+
+        // Calculate cash collected
+        const cashRes = await db.prepare(`
+          SELECT COALESCE(SUM(COALESCE(amount_paid, total)), 0) as cash_total
+          FROM sales
+          WHERE company_id = ? AND salesperson_id = ? AND status != 'cancelled'
+            AND (status = 'paid' OR amount_paid > 0) AND (sale_type != 'credit' OR sale_type IS NULL)
+            AND strftime('%Y-%m', created_at) = ?
+        `).get(companyId, spId, targetMonth);
+
+        // Calculate CxC collected
+        const cxcRes = await db.prepare(`
+          SELECT COALESCE(SUM(pa.amount_applied), 0) as cxc_total
+          FROM payment_allocations pa
+          JOIN receivable_payments rp ON pa.payment_id = rp.id
+          JOIN accounts_receivable ar ON pa.receivable_id = ar.id
+          LEFT JOIN sales s ON ar.sale_id = s.id
+          LEFT JOIN customers c ON rp.customer_id = c.id
+          WHERE rp.company_id = ?
+            AND (s.salesperson_id = ? OR (s.salesperson_id IS NULL AND c.salesperson_id = ?))
+            AND strftime('%Y-%m', rp.payment_date) = ?
+        `).get(companyId, spId, spId, targetMonth);
+
+        const cashTotal = parseFloat(cashRes?.cash_total || 0);
+        const cxcTotal = parseFloat(cxcRes?.cxc_total || 0);
+        const totalCollected = Math.round((cashTotal + cxcTotal) * 100) / 100;
+        const compliance = goal > 0 ? (totalCollected / goal) * 100 : 0;
+
+        if (compliance < 70.0) {
+          return res.status(400).json({
+            success: false,
+            message: `El vendedor ${sp.name} no alcanza el 70% requerido de la meta de cobro para el mes ${targetMonth} (Cobrado: RD$ ${totalCollected.toLocaleString('es-DO', { minimumFractionDigits: 2 })} - ${compliance.toFixed(1)}%).`
+          });
+        }
+
+        const commAmount = Math.round((totalCollected * (rate / 100)) * 100) / 100;
+        if (commAmount <= 0) continue;
+
+        const invoiceNum = `LIQ-${targetMonth}-${sp.id}`;
+        const receiptNum = generateCommercialId('REC-COM');
+
+        // Check if already paid
+        const existing = await db.prepare(`
+          SELECT id FROM commissions WHERE company_id = ? AND salesperson_id = ? AND invoice_number = ? AND status = 'paid'
+        `).get(companyId, spId, invoiceNum);
+
+        if (existing) {
+          return res.status(400).json({
+            success: false,
+            message: `La comisión del mes ${targetMonth} para ${sp.name} ya fue liquidada anteriormente.`
+          });
+        }
+
+        await db.prepare(`
+          INSERT INTO commissions (
+            company_id, salesperson_id, invoice_number, base_amount, commission_rate,
+            commission_amount, calculation_type, status, paid_at, receipt_number
+          ) VALUES (?, ?, ?, ?, ?, ?, 'monthly_collected', 'paid', CURRENT_TIMESTAMP, ?)
+        `).run(companyId, spId, invoiceNum, totalCollected, rate, commAmount, receiptNum);
+
+        results.push({
+          salesperson_id: sp.id,
+          name: sp.name,
+          month: targetMonth,
+          total_collected: totalCollected,
+          compliance_percentage: compliance,
+          commission_rate: rate,
+          commission_amount: commAmount,
+          receipt_number: receiptNum,
+          paid_at: new Date().toISOString()
+        });
+
+        totalPaidAll += commAmount;
+      }
+
+      return res.json({
+        success: true,
+        message: `Se liquidaron ${results.length} comisiones por un total de RD$ ${totalPaidAll.toLocaleString('es-DO', { minimumFractionDigits: 2 })}.`,
+        data: {
+          count: results.length,
+          total_paid: totalPaidAll,
+          month: targetMonth,
+          settlements: results
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error liquidando comisiones mensuales.', error: err.message });
+    }
+  },
+
   getCommissions: async (req, res) => {
     try {
       const companyId = req.user.company_id;

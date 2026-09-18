@@ -115,6 +115,7 @@ const importController = {
                 insertedCount++;
               } else {
                 skippedCount++;
+                details.push({ identifier: r.sku, error: 'SKU duplicado o ya existente (omitido)' });
               }
             } catch (e) {
               failCount++;
@@ -145,6 +146,7 @@ const importController = {
                 insertedCount++;
               } else {
                 skippedCount++;
+                details.push({ identifier: r.company_name || r.first_name, error: 'Registro duplicado o sin cambios (omitido)' });
               }
             } catch (e) {
               failCount++;
@@ -174,6 +176,7 @@ const importController = {
                 insertedCount++;
               } else {
                 skippedCount++;
+                details.push({ identifier: r.company_name, error: 'Registro duplicado o sin cambios (omitido)' });
               }
             } catch (e) {
               failCount++;
@@ -188,7 +191,7 @@ const importController = {
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(companyId, req.user.id, entity_type, rows.length, insertedCount, failCount, JSON.stringify(details));
 
-        return { insertedCount, skippedCount, failCount, total: rows.length };
+        return { insertedCount, skippedCount, failCount, total: rows.length, details };
       });
 
       logAudit({

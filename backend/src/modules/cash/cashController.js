@@ -61,7 +61,7 @@ const cashController = {
       movements.forEach(m => {
         if (['sale_cash', 'cxc_payment', 'deposit'].includes(m.type)) {
           netCash += Number(m.total);
-        } else if (['withdrawal', 'expense', 'refund'].includes(m.type)) {
+        } else if (['withdrawal', 'expense', 'refund', 'refund_cash'].includes(m.type)) {
           netCash -= Number(m.total);
         }
       });

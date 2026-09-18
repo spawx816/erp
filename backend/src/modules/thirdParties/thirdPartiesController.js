@@ -25,11 +25,19 @@ const thirdPartiesController = {
 
       const formatted = salespeople.map(s => {
         const goal = parseFloat(s.monthly_goal || 0);
+        const monthCollections = parseFloat(s.collections_month || 0);
         const monthSales = parseFloat(s.sales_month || 0);
-        const compliance = goal > 0 ? Math.round((monthSales / goal) * 100) : 0;
+        const compliance = goal > 0 ? Math.round((monthCollections / goal) * 10000) / 100 : 0;
+        const qualifies = compliance >= 70.0;
+        const estimatedCommission = qualifies ? Math.round((monthCollections * (parseFloat(s.commission_rate || 5) / 100)) * 100) / 100 : 0.00;
         return {
           ...s,
-          compliance_percentage: compliance
+          sales_month: monthSales,
+          collections_month: monthCollections,
+          compliance_percentage: compliance,
+          qualifies_commission: qualifies,
+          min_threshold_percentage: 70.0,
+          estimated_commission: estimatedCommission
         };
       });
 
@@ -93,22 +101,30 @@ const thirdPartiesController = {
   createSalesperson: async (req, res) => {
     try {
       const companyId = req.user.company_id;
-      const { name, code, phone, email, zone, monthly_goal, commission_rate, hire_date } = req.body;
+      const { name, code, phone, email, zone, monthly_goal, commission_rate, commission_calculation_type, hire_date } = req.body;
 
       if (!name) return res.status(400).json({ success: false, message: 'El nombre del vendedor es obligatorio.' });
 
-      let spCode = code;
+      let spCode = code ? String(code).trim() : null;
       if (!spCode) {
         const countRow = await db.prepare(`SELECT count(*) as count FROM salespeople WHERE company_id = ?`).get(companyId);
         const count = countRow ? parseInt(countRow.count, 10) || 0 : 0;
         spCode = `VEND-${String(count + 1).padStart(3, '0')}`;
       }
 
+      // Check unique code within the company
+      const existing = await db.prepare(`SELECT id FROM salespeople WHERE company_id = ? AND code = ?`).get(companyId, spCode);
+      if (existing) {
+        return res.status(400).json({ success: false, message: `Ya existe un vendedor con el código [${spCode}] en esta empresa.` });
+      }
+
+      const calcType = commission_calculation_type === 'collected' ? 'collected' : 'invoiced';
+
       const stmt = await db.prepare(`
-        INSERT INTO salespeople (company_id, code, name, phone, email, zone, monthly_goal, commission_rate, hire_date, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        INSERT INTO salespeople (company_id, code, name, phone, email, zone, monthly_goal, commission_rate, commission_calculation_type, hire_date, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
       `);
-      const result = await stmt.run(companyId, spCode, name, phone, email, zone, monthly_goal || 200000.00, commission_rate || 5.00, hire_date || new Date().toISOString().split('T')[0]);
+      const result = await stmt.run(companyId, spCode, name, phone, email, zone, monthly_goal || 200000.00, commission_rate || 5.00, calcType, hire_date || new Date().toISOString().split('T')[0]);
 
       logAudit({
         companyId,
@@ -116,7 +132,7 @@ const thirdPartiesController = {
         module: 'salespeople',
         action: 'create',
         recordId: String(result.lastInsertRowid),
-        description: `Creado nuevo vendedor: ${name} (${spCode})`
+        description: `Creado nuevo vendedor: ${name} (${spCode}) [Comisión: ${calcType}]`
       });
 
       return res.status(201).json({ success: true, message: 'Vendedor creado correctamente.', id: result.lastInsertRowid });
@@ -129,7 +145,7 @@ const thirdPartiesController = {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
-      const { name, phone, email, zone, monthly_goal, commission_rate, status } = req.body;
+      const { name, phone, email, zone, monthly_goal, commission_rate, commission_calculation_type, status } = req.body;
 
       await db.prepare(`
         UPDATE salespeople
@@ -139,14 +155,124 @@ const thirdPartiesController = {
             zone = COALESCE(?, zone),
             monthly_goal = COALESCE(?, monthly_goal),
             commission_rate = COALESCE(?, commission_rate),
+            commission_calculation_type = COALESCE(?, commission_calculation_type),
             status = COALESCE(?, status),
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND company_id = ?
-      `).run(name, phone, email, zone, monthly_goal, commission_rate, status, id, companyId);
+      `).run(name, phone, email, zone, monthly_goal, commission_rate, commission_calculation_type, status, id, companyId);
 
       return res.json({ success: true, message: 'Vendedor actualizado correctamente.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  // CREDIT CHECK UNIFICADO
+  evaluateCustomerCredit: async ({ customerId, companyId, amount = 0, txDb = null }) => {
+    const activeDb = txDb || db;
+    const cust = await activeDb.prepare(`
+      SELECT id, company_name, code, salesperson_id, credit_days, credit_limit, current_balance,
+             is_credit_blocked, requires_special_auth, allow_sales_with_overdue_invoices, status
+      FROM customers WHERE id = ? AND company_id = ?
+    `).get(customerId, companyId);
+
+    if (!cust) {
+      return {
+        eligible: false,
+        blocked: true,
+        customer: null,
+        reason: 'Cliente no válido o no pertenece a esta empresa.'
+      };
+    }
+
+    if (cust.status === 'inactive') {
+      return {
+        eligible: false,
+        blocked: true,
+        customer: cust,
+        reason: `El cliente [${cust.company_name || cust.code}] está INACTIVO. No se permiten operaciones comerciales.`
+      };
+    }
+
+    const creditLimit = Number(cust.credit_limit || 0);
+    const currentBalance = Number(cust.current_balance || 0);
+    const availableCredit = Math.max(0, Math.round((creditLimit - currentBalance) * 100) / 100);
+    const requestedAmount = Math.max(0, Math.round(Number(amount) * 100) / 100);
+
+    // Check overdue accounts receivable
+    const overdueCheck = await activeDb.prepare(`
+      SELECT COUNT(*) as cnt, COALESCE(SUM(balance), 0) as overdue_balance
+      FROM accounts_receivable
+      WHERE customer_id = ? AND company_id = ? AND status != 'paid' AND due_date < CURRENT_DATE AND balance > 0.01
+    `).get(customerId, companyId);
+
+    const overdueCount = Number(overdueCheck?.cnt || 0);
+    const overdueBalance = Number(overdueCheck?.overdue_balance || 0);
+    const hasOverdue = overdueCount > 0;
+    const overdueBlocked = hasOverdue && (cust.allow_sales_with_overdue_invoices !== 1 && cust.allow_sales_with_overdue_invoices !== true && cust.allow_sales_with_overdue_invoices !== '1');
+    const isCreditBlocked = (cust.is_credit_blocked === 1 || cust.is_credit_blocked === true);
+    const requiresSpecialAuth = (cust.requires_special_auth === 1 || cust.requires_special_auth === true);
+    const creditExceeded = (requestedAmount > availableCredit && creditLimit > 0);
+    const hasNoCreditLine = (creditLimit <= 0 && requestedAmount > 0);
+
+    let needsSupervisorAuth = false;
+    let reason = null;
+
+    if (isCreditBlocked) {
+      needsSupervisorAuth = true;
+      reason = 'El cliente tiene el crédito bloqueado por administración.';
+    } else if (overdueBlocked) {
+      needsSupervisorAuth = true;
+      reason = `El cliente tiene ${overdueCount} factura(s) vencida(s) impagadas por un total de RD$ ${overdueBalance.toFixed(2)}.`;
+    } else if (creditExceeded) {
+      needsSupervisorAuth = true;
+      reason = `Monto de venta (RD$ ${requestedAmount.toFixed(2)}) supera el crédito disponible (RD$ ${availableCredit.toFixed(2)}).`;
+    } else if (requiresSpecialAuth) {
+      needsSupervisorAuth = true;
+      reason = 'El cliente requiere autorización especial de supervisor por perfil de riesgo.';
+    } else if (hasNoCreditLine) {
+      needsSupervisorAuth = true;
+      reason = 'El cliente no posee una línea de crédito autorizada (Límite RD$ 0.00).';
+    }
+
+    return {
+      eligible: !needsSupervisorAuth,
+      blocked: false,
+      customer_id: cust.id,
+      company_name: cust.company_name,
+      credit_limit: creditLimit,
+      current_balance: currentBalance,
+      available_credit: availableCredit,
+      requested_amount: requestedAmount,
+      has_overdue: hasOverdue,
+      overdue_count: overdueCount,
+      overdue_balance: overdueBalance,
+      overdue_blocked: overdueBlocked,
+      is_credit_blocked: isCreditBlocked,
+      requires_special_auth: requiresSpecialAuth,
+      needs_supervisor_auth: needsSupervisorAuth,
+      reason
+    };
+  },
+
+  checkCustomerCredit: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const customerId = req.params.id;
+      const amount = req.query.amount ? Number(req.query.amount) : 0;
+
+      const assessment = await thirdPartiesController.evaluateCustomerCredit({
+        customerId,
+        companyId,
+        amount
+      });
+
+      return res.json({
+        success: true,
+        data: assessment
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error evaluando crédito del cliente.', error: err.message });
     }
   },
 
@@ -287,7 +413,10 @@ const thirdPartiesController = {
 
       // Collection Notes & Promises
       const collectionNotes = await db.prepare(`
-        SELECT cn.*, u.first_name || ' ' || u.last_name as user_name
+        SELECT cn.*,
+               COALESCE(cn.notes, '') as note,
+               cn.promise_date as promised_payment_date,
+               u.first_name || ' ' || u.last_name as user_name
         FROM collection_notes cn
         LEFT JOIN users u ON cn.user_id = u.id
         WHERE cn.customer_id = ?
@@ -369,6 +498,12 @@ const thirdPartiesController = {
       const customer = await db.prepare(`SELECT * FROM customers WHERE id = ? AND company_id = ?`).get(id, companyId);
       if (!customer) return res.status(404).json({ success: false, message: 'Cliente no encontrado.' });
 
+      const company = await db.prepare(`
+        SELECT id, name, legal_name, tax_id, phone, address, logo_url 
+        FROM companies 
+        WHERE id = ?
+      `).get(companyId);
+
       // Gather debits (Invoices) and credits (Payments, Credit Notes, and Direct POS/Sale Payments #17)
       const salesQuery = `
         SELECT id, sale_number as document, invoice_number, ncf, created_at as date,
@@ -425,10 +560,21 @@ const thirdPartiesController = {
       }
 
       // Query detailed sales invoices with balance and overdue status
+      let invoiceDateFilter = '';
+      const invoiceParams = [id, companyId];
+      if (start_date) {
+        invoiceDateFilter += ` AND s.created_at >= ?`;
+        invoiceParams.push(`${start_date} 00:00:00`);
+      }
+      if (end_date) {
+        invoiceDateFilter += ` AND s.created_at <= ?`;
+        invoiceParams.push(`${end_date} 23:59:59`);
+      }
+
       const invoices = await db.prepare(`
         SELECT s.id, s.invoice_number, s.ncf, s.sale_number,
-               strftime('%Y-%m-%d', s.created_at) as issue_date,
-               strftime('%Y-%m-%d', s.due_date) as due_date,
+               s.created_at,
+               s.due_date,
                s.total as amount, s.balance, s.status,
                (CURRENT_DATE > s.due_date AND s.balance > 0) as is_overdue,
                CASE WHEN CURRENT_DATE > s.due_date AND s.due_date IS NOT NULL AND s.balance > 0 
@@ -436,13 +582,56 @@ const thirdPartiesController = {
                     ELSE 0 
                END as days_overdue
         FROM sales s
-        WHERE s.customer_id = ? AND s.company_id = ? AND s.status != 'cancelled'
-        ORDER BY s.created_at DESC
-      `).all(id, companyId);
+        WHERE s.customer_id = ? AND s.company_id = ? AND s.status != 'cancelled' ${invoiceDateFilter}
+        ORDER BY s.created_at ASC
+      `).all(...invoiceParams);
 
-      const openInvoices = invoices.filter(i => Number(i.balance) > 0);
-      const overdueInvoices = invoices.filter(i => i.is_overdue);
-      const overdueBalance = overdueInvoices.reduce((acc, i) => acc + Number(i.balance || 0), 0);
+      const formattedInvoices = invoices.map(i => {
+        const amt = Number(i.amount || 0);
+        const bal = Number(i.balance || 0);
+        const daysOver = parseInt(i.days_overdue, 10) || 0;
+        
+        let formattedReg = '';
+        if (i.created_at) {
+          try {
+            const d = new Date(i.created_at);
+            formattedReg = isNaN(d.getTime()) ? String(i.created_at) : d.toLocaleDateString('es-DO');
+          } catch {
+            formattedReg = String(i.created_at);
+          }
+        }
+
+        let formattedDue = '';
+        if (i.due_date || i.created_at) {
+          try {
+            const d = new Date(i.due_date || i.created_at);
+            formattedDue = isNaN(d.getTime()) ? String(i.due_date || i.created_at) : d.toLocaleDateString('es-DO');
+          } catch {
+            formattedDue = String(i.due_date || i.created_at);
+          }
+        }
+
+        return {
+          id: i.id,
+          registro: formattedReg || i.created_at,
+          raw_registro: i.created_at,
+          tipo: 'Factura',
+          numero: i.sale_number || i.invoice_number || `FAC-${i.id}`,
+          ncf: i.ncf || 'B0200000000',
+          vencimiento: formattedDue || i.due_date || i.created_at,
+          raw_vencimiento: i.due_date || i.created_at,
+          importe: amt,
+          pendiente: bal,
+          venci: Math.max(0, daysOver),
+          is_overdue: daysOver > 0,
+          status: i.status
+        };
+      });
+
+      const openInvoices = formattedInvoices.filter(i => i.pendiente > 0);
+      const overdueInvoices = formattedInvoices.filter(i => i.is_overdue && i.pendiente > 0);
+      const totalPendiente = openInvoices.reduce((acc, i) => acc + i.pendiente, 0);
+      const overdueBalance = overdueInvoices.reduce((acc, i) => acc + i.pendiente, 0);
       const realCustomerBalance = (customer.current_balance !== null && customer.current_balance !== undefined)
         ? Number(customer.current_balance)
         : runningBalance;
@@ -450,8 +639,23 @@ const thirdPartiesController = {
       return res.json({
         success: true,
         data: {
+          company: company || {
+            name: 'Comercial Cambri SRL',
+            legal_name: 'Comercial Cambri SRL',
+            tax_id: '131-45678-9',
+            phone: '809-555-0100',
+            address: 'Av. Winston Churchill #1099, Santo Domingo'
+          },
           customer,
-          invoices,
+          meta: {
+            generated_by: req.user.username || 'Sistema',
+            user_full_name: `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() || req.user.username,
+            generated_at: new Date().toLocaleString('es-DO'),
+            start_date: start_date || null,
+            end_date: end_date || null,
+            period_label: req.query.period_label || 'Histórico Completo'
+          },
+          invoices: formattedInvoices,
           open_invoices: openInvoices,
           ledger,
           summary: {
@@ -460,6 +664,7 @@ const thirdPartiesController = {
                            creditNotes.reduce((acc, c) => acc + Number(c.credit || 0), 0) +
                            salePayments.reduce((acc, sp) => acc + Number(sp.credit || 0), 0),
             current_balance: realCustomerBalance,
+            total_pendiente: totalPendiente,
             initial_balance: initialBalance,
             open_invoices_count: openInvoices.length,
             overdue_invoices_count: overdueInvoices.length,
@@ -623,7 +828,7 @@ const thirdPartiesController = {
       logAudit({
         companyId,
         userId: req.user.id,
-        ipAddress: req.ip || req.connection.remoteAddress,
+        ipAddress: req.ip || req.socket?.remoteAddress,
         module: 'customers',
         action: newBlocked === 1 ? 'credit_block' : 'credit_unblock',
         recordId: id,
@@ -640,12 +845,49 @@ const thirdPartiesController = {
     }
   },
 
+  toggleCustomerStatus: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { id } = req.params;
+      const cust = await db.prepare('SELECT id, status, company_name, first_name, last_name, code FROM customers WHERE id = ? AND company_id = ?').get(id, companyId);
+      if (!cust) return res.status(404).json({ success: false, message: 'Cliente no encontrado.' });
+
+      const newStatus = cust.status === 'active' ? 'inactive' : 'active';
+      await db.prepare('UPDATE customers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?').run(newStatus, id, companyId);
+
+      const customerLabel = cust.company_name || `${cust.first_name || ''} ${cust.last_name || ''}`.trim() || cust.code;
+
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip || req.socket?.remoteAddress,
+        module: 'customers',
+        action: newStatus === 'active' ? 'activate_customer' : 'deactivate_customer',
+        recordId: id,
+        description: `Cliente [${customerLabel}] ha sido ${newStatus === 'active' ? 'ACTIVADO' : 'DESACTIVADO'} por ${req.user.username}`
+      });
+
+      return res.json({
+        success: true,
+        status: newStatus,
+        message: newStatus === 'active' 
+          ? `Cliente [${customerLabel}] ha sido ACTIVADO exitosamente.` 
+          : `Cliente [${customerLabel}] ha sido DESACTIVADO.`
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   // COLLECTION NOTES & PROMISES
   getCollectionNotes: async (req, res) => {
     try {
       const { id } = req.params;
       const notes = await db.prepare(`
-        SELECT cn.*, u.first_name || ' ' || u.last_name as user_name
+        SELECT cn.*,
+               COALESCE(cn.notes, '') as note,
+               cn.promise_date as promised_payment_date,
+               u.first_name || ' ' || u.last_name as user_name
         FROM collection_notes cn
         LEFT JOIN users u ON cn.user_id = u.id
         WHERE cn.customer_id = ?
@@ -662,7 +904,19 @@ const thirdPartiesController = {
     try {
       const companyId = req.user.company_id;
       const { id } = req.params;
-      const { contact_channel, result, notes, promise_date, promise_amount, next_action_date } = req.body;
+      const {
+        contact_channel,
+        result,
+        notes,
+        note,
+        promise_date,
+        promised_payment_date,
+        promise_amount,
+        next_action_date
+      } = req.body;
+
+      const noteText = (notes !== undefined && notes !== null ? notes : note) || '';
+      const promiseDate = promise_date || promised_payment_date || null;
 
       const stmt = await db.prepare(`
         INSERT INTO collection_notes (
@@ -672,7 +926,7 @@ const thirdPartiesController = {
       `);
       const r = await stmt.run(
         companyId, id, req.user.id, contact_channel || 'phone', result || 'promise',
-        notes, promise_date || null, promise_amount || 0.00, next_action_date || null
+        noteText, promiseDate, promise_amount || 0.00, next_action_date || null
       );
 
       return res.status(201).json({ success: true, message: 'Gestión de cobro registrada.', id: r.lastInsertRowid });
@@ -809,6 +1063,66 @@ const thirdPartiesController = {
       return res.status(201).json({ success: true, message: 'Convenio de afiliado creado.', id: result.lastInsertRowid });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  reconcileSuppliers: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { supplier_id } = req.body;
+
+      let suppliersToReconcile;
+      if (supplier_id) {
+        suppliersToReconcile = await db.prepare('SELECT id, company_name, current_balance FROM suppliers WHERE id = ? AND company_id = ?').all(supplier_id, companyId);
+      } else {
+        suppliersToReconcile = await db.prepare('SELECT id, company_name, current_balance FROM suppliers WHERE company_id = ?').all(companyId);
+      }
+
+      const results = [];
+      for (const sup of suppliersToReconcile) {
+        const actualBalRow = await db.prepare(`
+          SELECT COALESCE(SUM(balance), 0) as actual_balance
+          FROM accounts_payable
+          WHERE supplier_id = ? AND company_id = ? AND status != 'paid'
+        `).get(sup.id, companyId);
+
+        const actualBalance = actualBalRow ? Number(actualBalRow.actual_balance) : 0;
+        const previousBalance = Number(sup.current_balance || 0);
+        const difference = Math.round((actualBalance - previousBalance) * 100) / 100;
+
+        if (Math.abs(difference) > 0.009) {
+          await db.prepare('UPDATE suppliers SET current_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(actualBalance, sup.id);
+          results.push({
+            supplier_id: sup.id,
+            company_name: sup.company_name,
+            previous_balance: previousBalance,
+            reconciled_balance: actualBalance,
+            difference,
+            status: 'adjusted'
+          });
+        } else {
+          results.push({
+            supplier_id: sup.id,
+            company_name: sup.company_name,
+            previous_balance: previousBalance,
+            reconciled_balance: actualBalance,
+            difference: 0,
+            status: 'in_sync'
+          });
+        }
+      }
+
+      const adjustedCount = results.filter(r => r.status === 'adjusted').length;
+      return res.json({
+        success: true,
+        message: adjustedCount > 0
+          ? `Conciliación finalizada: ${adjustedCount} saldo(s) de proveedor corregidos exitosamente.`
+          : 'Todos los saldos de proveedores están perfectamente sincronizados con CxP.',
+        adjusted_count: adjustedCount,
+        data: results
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error conciliando saldos.', error: err.message });
     }
   }
 };

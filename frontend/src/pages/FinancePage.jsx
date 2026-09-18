@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   DollarSign, Clock, Users, ArrowUpRight, ArrowDownLeft,
   Plus, Calendar, CheckCircle2, AlertCircle, X, Receipt,
   HandCoins, History, CalendarClock, CreditCard, ChevronRight,
-  Printer, ArrowRight, Check, AlertTriangle, ShieldAlert
+  Printer, ArrowRight, Check, AlertTriangle, ShieldAlert,
+  Search, Filter, ChevronLeft, ChevronsLeft, ChevronsRight, RotateCcw,
+  Download
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
@@ -22,6 +24,22 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
   const [expenseCategories, setExpenseCategories] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // CxC Filters and Pagination
+  const [cxcSearch, setCxcSearch] = useState('');
+  const [cxcStatusFilter, setCxcStatusFilter] = useState('all'); // 'all' | 'current' | 'overdue' | 'critical'
+  const [cxcSalespersonFilter, setCxcSalespersonFilter] = useState('');
+  const [cxcPage, setCxcPage] = useState(1);
+  const [cxcPageSize, setCxcPageSize] = useState(15);
+
+  // Expenses Filters and Pagination
+  const [expenseSearch, setExpenseSearch] = useState('');
+  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState('');
+  const [expenseDateFrom, setExpenseDateFrom] = useState('');
+  const [expenseDateTo, setExpenseDateTo] = useState('');
+  const [expensePage, setExpensePage] = useState(1);
+  const [expensePageSize, setExpensePageSize] = useState(15);
+  const [expenseStatusFilter, setExpenseStatusFilter] = useState('all'); // 'all' | 'active' | 'cancelled'
 
   // Multi-invoice payment modal (Section #13)
   const [showMultiPayModal, setShowMultiPayModal] = useState(false);
@@ -44,14 +62,35 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
     payment_method: 'cash',
     beneficiary: '',
     voucher_number: '',
-    notes: ''
+    notes: '',
+    expense_date: new Date().toISOString().split('T')[0]
   });
 
   // Receipt Modal
   const [completedPaymentReceipt, setCompletedPaymentReceipt] = useState(null);
 
+  // Pay Supplier Modal (CxP)
+  const [showPaySupplierModal, setShowPaySupplierModal] = useState(false);
+  const [selectedPayable, setSelectedPayable] = useState(null);
+  const [paySupplierAmount, setPaySupplierAmount] = useState('');
+  const [paySupplierMethod, setPaySupplierMethod] = useState('transfer');
+  const [paySupplierRef, setPaySupplierRef] = useState('');
+  const [paySupplierNotes, setPaySupplierNotes] = useState('');
+  const [submittingPaySupplier, setSubmittingPaySupplier] = useState(false);
+
   useEffect(() => {
     loadData();
+
+    const handleExternalUpdate = () => {
+      loadData();
+    };
+    window.addEventListener('sgc:sale-completed', handleExternalUpdate);
+    window.addEventListener('sgc:credit-note-created', handleExternalUpdate);
+
+    return () => {
+      window.removeEventListener('sgc:sale-completed', handleExternalUpdate);
+      window.removeEventListener('sgc:credit-note-created', handleExternalUpdate);
+    };
   }, [activeTab, activeBranch]);
 
   const loadData = async () => {
@@ -67,11 +106,8 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
         const res = await api.get('/finance/payables');
         if (res.success) setPayables(res.data);
       } else if (activeTab === 'expenses') {
-        const [expRes, catRes] = await Promise.all([
-          api.get('/finance/expenses'),
-          api.get('/finance/expense-categories')
-        ]);
-        if (expRes.success) setExpenses(expRes.data);
+        await loadExpenses();
+        const catRes = await api.get('/finance/expense-categories');
         if (catRes.success) setExpenseCategories(catRes.data);
       }
 
@@ -82,6 +118,23 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
       addToast('Error al cargar datos financieros.', 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadExpenses = async () => {
+    const params = {
+      page: expensePage,
+      limit: expensePageSize,
+      search: expenseSearch || undefined,
+      category_id: expenseCategoryFilter || undefined,
+      start_date: expenseDateFrom || undefined,
+      end_date: expenseDateTo || undefined,
+      status: expenseStatusFilter !== 'all' ? expenseStatusFilter : undefined
+    };
+
+    const res = await api.get('/finance/expenses', params);
+    if (res.success) {
+      setExpenses(res.data);
     }
   };
 
@@ -180,6 +233,7 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
 
         setShowMultiPayModal(false);
         loadData();
+        window.dispatchEvent(new CustomEvent('sgc:payment-recorded', { detail: { customerId: selectedCustomerForPay.id, amount: total } }));
       }
     } catch (err) {
       addToast(err.message || 'Error registrando cobro.', 'error');
@@ -209,6 +263,195 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
       addToast(err.message || 'Error registrando gasto.', 'error');
     }
   };
+
+  const handleExportExpensesCSV = () => {
+    if (!expenses || expenses.length === 0) {
+      addToast('No hay gastos para exportar.', 'warning');
+      return;
+    }
+    const headers = ['Fecha', 'Categoría', 'Beneficiario', 'Monto (RD$)', 'Método', 'Comprobante', 'Estado', 'Notas'];
+    const rows = expenses.map(e => [
+      e.expense_date,
+      e.category_name || '',
+      e.beneficiary || '',
+      Number(e.amount).toFixed(2),
+      e.payment_method,
+      e.voucher_number || '',
+      e.status || 'active',
+      e.notes || ''
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.map(v => `"${v}"`).join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `gastos_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    addToast('Gastos exportados a CSV.', 'success');
+  };
+
+  const handleOpenPaySupplier = (payable = null) => {
+    if (payable) {
+      setSelectedPayable(payable);
+      setPaySupplierAmount(String(payable.balance || ''));
+    } else {
+      const firstOpen = payables.find(p => Number(p.balance) > 0) || payables[0];
+      setSelectedPayable(firstOpen || null);
+      setPaySupplierAmount(firstOpen ? String(firstOpen.balance || '') : '');
+    }
+    setPaySupplierMethod('transfer');
+    setPaySupplierRef('');
+    setPaySupplierNotes('');
+    setShowPaySupplierModal(true);
+  };
+
+  const handleProcessPaySupplier = async (e) => {
+    e.preventDefault();
+    if (!selectedPayable) {
+      addToast('Seleccione la factura de proveedor a pagar.', 'warning');
+      return;
+    }
+    const amt = parseFloat(paySupplierAmount);
+    if (isNaN(amt) || amt <= 0) {
+      addToast('Ingrese un monto válido mayor a 0.', 'warning');
+      return;
+    }
+    if (amt > Number(selectedPayable.balance) + 0.01) {
+      addToast(`El monto excede el saldo pendiente (RD$ ${Number(selectedPayable.balance).toLocaleString('es-DO')}).`, 'warning');
+      return;
+    }
+
+    setSubmittingPaySupplier(true);
+    try {
+      const res = await api.post('/finance/payables/pay', {
+        payable_id: selectedPayable.id,
+        amount: amt,
+        payment_method: paySupplierMethod,
+        reference_number: paySupplierRef,
+        notes: paySupplierNotes
+      });
+      if (res.success) {
+        addToast('Pago a proveedor registrado exitosamente.', 'success');
+        setShowPaySupplierModal(false);
+        loadData();
+      } else {
+        addToast(res.message || 'Error registrando pago.', 'error');
+      }
+    } catch (err) {
+      addToast(err.message || 'Error registrando pago a proveedor.', 'error');
+    } finally {
+      setSubmittingPaySupplier(false);
+    }
+  };
+
+  const formatFinanceDate = (d) => {
+    if (!d) return '-';
+    try {
+      const val = typeof d === 'string' ? d.split('T')[0] : d;
+      if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val)) {
+        const [y, m, day] = val.split('-');
+        return `${day}/${m}/${y}`;
+      }
+      return new Date(d).toLocaleDateString('es-DO');
+    } catch {
+      return String(d);
+    }
+  };
+
+  // CxC Filtering & Pagination
+  useEffect(() => {
+    setCxcPage(1);
+  }, [cxcSearch, cxcStatusFilter, cxcSalespersonFilter]);
+
+  const uniqueSalespeople = useMemo(() => {
+    const list = new Set();
+    receivables.forEach(r => {
+      if (r.salesperson_name) list.add(r.salesperson_name);
+    });
+    return Array.from(list);
+  }, [receivables]);
+
+  const filteredReceivables = useMemo(() => {
+    return receivables.filter(r => {
+      const isOverdue = Number(r.days_overdue) > 0;
+      const days = Number(r.days_overdue) || 0;
+
+      // Status filter
+      if (cxcStatusFilter === 'current' && isOverdue) return false;
+      if (cxcStatusFilter === 'overdue' && !isOverdue) return false;
+      if (cxcStatusFilter === 'critical' && days <= 60) return false;
+
+      // Salesperson filter
+      if (cxcSalespersonFilter && r.salesperson_name !== cxcSalespersonFilter) return false;
+
+      // Search filter
+      if (cxcSearch.trim()) {
+        const q = cxcSearch.toLowerCase().trim();
+        const invoiceNum = (r.invoice_number || `FAC-${r.sale_id}` || '').toLowerCase();
+        const ncf = (r.ncf || '').toLowerCase();
+        const customer = (r.customer_name || '').toLowerCase();
+        if (!invoiceNum.includes(q) && !ncf.includes(q) && !customer.includes(q)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [receivables, cxcStatusFilter, cxcSalespersonFilter, cxcSearch]);
+
+  const cxcTotals = useMemo(() => {
+    let totalBal = 0;
+    let overdueBal = 0;
+    let currentBal = 0;
+    let overdueCount = 0;
+    let currentCount = 0;
+
+    receivables.forEach(r => {
+      const b = Number(r.balance) || 0;
+      const isOver = Number(r.days_overdue) > 0;
+      totalBal += b;
+      if (isOver) {
+        overdueBal += b;
+        overdueCount++;
+      } else {
+        currentBal += b;
+        currentCount++;
+      }
+    });
+
+    return { totalBal, overdueBal, currentBal, overdueCount, currentCount, totalCount: receivables.length };
+  }, [receivables]);
+
+  const totalCxcPages = Math.max(1, Math.ceil(filteredReceivables.length / cxcPageSize));
+
+  useEffect(() => {
+    if (cxcPage > totalCxcPages) {
+      setCxcPage(1);
+    }
+  }, [totalCxcPages, cxcPage]);
+
+  const paginatedReceivables = useMemo(() => {
+    const start = (cxcPage - 1) * cxcPageSize;
+    return filteredReceivables.slice(start, start + cxcPageSize);
+  }, [filteredReceivables, cxcPage, cxcPageSize]);
+
+  const cxcPageNumbers = useMemo(() => {
+    const pages = [];
+    const maxButtons = 5;
+    let start = Math.max(1, cxcPage - 2);
+    let end = Math.min(totalCxcPages, start + maxButtons - 1);
+
+    if (end - start < maxButtons - 1) {
+      start = Math.max(1, end - maxButtons + 1);
+    }
+
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
+    return pages;
+  }, [cxcPage, totalCxcPages]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
@@ -253,14 +496,34 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button
-            onClick={() => handleOpenMultiPay(null)}
-            className="btn btn-primary"
-            style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
-          >
-            <HandCoins size={16} />
-            <span>Registrar Cobro Multi-Factura</span>
-          </button>
+          {activeTab === 'cxp' ? (
+            <button
+              onClick={() => handleOpenPaySupplier(null)}
+              className="btn btn-primary"
+              style={{ background: 'linear-gradient(135deg, #0284c7, #0369a1)', gap: '6px' }}
+            >
+              <HandCoins size={16} />
+              <span>Registrar Pago a Proveedor</span>
+            </button>
+          ) : activeTab === 'expenses' ? (
+            <button
+              onClick={() => setShowExpenseModal(true)}
+              className="btn btn-primary"
+              style={{ background: 'linear-gradient(135deg, #8b5cf6, #6d28d9)', gap: '6px' }}
+            >
+              <Plus size={16} />
+              <span>Registrar Gasto Operativo</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => handleOpenMultiPay(null)}
+              className="btn btn-primary"
+              style={{ background: 'linear-gradient(135deg, #10b981, #059669)', gap: '6px' }}
+            >
+              <HandCoins size={16} />
+              <span>Registrar Cobro Multi-Factura</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -299,6 +562,203 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
       {/* TAB 1: CXC FACTURAS */}
       {activeTab === 'cxc' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Summary KPIs */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
+            <div
+              className="card"
+              onClick={() => setCxcStatusFilter('all')}
+              style={{
+                padding: '16px 18px',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                borderColor: cxcStatusFilter === 'all' ? '#3b82f6' : 'var(--border-color)',
+                background: cxcStatusFilter === 'all' ? 'rgba(59, 130, 246, 0.08)' : undefined,
+                boxShadow: cxcStatusFilter === 'all' ? '0 0 0 1px #3b82f6' : 'none'
+              }}
+              title="Click para ver todas las facturas"
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Cartera Total CxC</span>
+                  <h4 style={{ fontSize: '1.4rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '4px' }}>
+                    RD$ {cxcTotals.totalBal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                  </h4>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                    {cxcTotals.totalCount} facturas pendientes
+                  </span>
+                </div>
+                <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.15)', borderRadius: '10px' }}>
+                  <Clock size={18} color="#3b82f6" />
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="card"
+              onClick={() => setCxcStatusFilter(cxcStatusFilter === 'overdue' ? 'all' : 'overdue')}
+              style={{
+                padding: '16px 18px',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                borderColor: cxcStatusFilter === 'overdue' ? '#ef4444' : 'rgba(239, 68, 68, 0.3)',
+                background: cxcStatusFilter === 'overdue' ? 'rgba(239, 68, 68, 0.12)' : undefined,
+                boxShadow: cxcStatusFilter === 'overdue' ? '0 0 0 1px #ef4444' : 'none'
+              }}
+              title="Click para filtrar solo facturas vencidas en mora"
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#ef4444', textTransform: 'uppercase', fontWeight: 600 }}>Cartera en Mora</span>
+                  <h4 style={{ fontSize: '1.4rem', fontWeight: 900, color: '#ef4444', marginTop: '4px' }}>
+                    RD$ {cxcTotals.overdueBal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                  </h4>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    {cxcTotals.overdueCount} facturas vencidas {cxcStatusFilter === 'overdue' ? '● Filtro activo' : ''}
+                  </span>
+                </div>
+                <div style={{ padding: '8px', background: 'rgba(239, 68, 68, 0.15)', borderRadius: '10px' }}>
+                  <AlertTriangle size={18} color="#ef4444" />
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="card"
+              onClick={() => setCxcStatusFilter(cxcStatusFilter === 'current' ? 'all' : 'current')}
+              style={{
+                padding: '16px 18px',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                borderColor: cxcStatusFilter === 'current' ? '#10b981' : 'rgba(16, 185, 129, 0.3)',
+                background: cxcStatusFilter === 'current' ? 'rgba(16, 185, 129, 0.12)' : undefined,
+                boxShadow: cxcStatusFilter === 'current' ? '0 0 0 1px #10b981' : 'none'
+              }}
+              title="Click para filtrar solo facturas al día"
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#10b981', textTransform: 'uppercase', fontWeight: 600 }}>Cartera al Día</span>
+                  <h4 style={{ fontSize: '1.4rem', fontWeight: 900, color: '#10b981', marginTop: '4px' }}>
+                    RD$ {cxcTotals.currentBal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                  </h4>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    {cxcTotals.currentCount} facturas vigentes {cxcStatusFilter === 'current' ? '● Filtro activo' : ''}
+                  </span>
+                </div>
+                <div style={{ padding: '8px', background: 'rgba(16, 185, 129, 0.15)', borderRadius: '10px' }}>
+                  <CheckCircle2 size={18} color="#10b981" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Controls & Filter Toolbar */}
+          <div className="card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '280px', flexWrap: 'wrap' }}>
+              {/* Search Box */}
+              <div style={{ position: 'relative', minWidth: '260px', flex: 1 }}>
+                <Search size={16} color="var(--text-muted)" style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)' }} />
+                <input
+                  type="text"
+                  className="input-control"
+                  placeholder="Buscar por Factura, NCF o Cliente..."
+                  value={cxcSearch}
+                  onChange={(e) => setCxcSearch(e.target.value)}
+                  style={{ paddingLeft: '32px', height: '36px', fontSize: '0.8rem', width: '100%' }}
+                />
+              </div>
+
+              {/* Salesperson Filter */}
+              {uniqueSalespeople.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Vendedor:</span>
+                  <select
+                    className="select-control"
+                    value={cxcSalespersonFilter}
+                    onChange={(e) => setCxcSalespersonFilter(e.target.value)}
+                    style={{ height: '36px', fontSize: '0.8rem', minWidth: '160px', padding: '0 8px' }}
+                  >
+                    <option value="">Todos los Vendedores</option>
+                    {uniqueSalespeople.map(sp => (
+                      <option key={sp} value={sp}>{sp}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Quick Status Chips */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginRight: '2px' }}>Estado:</span>
+              <button
+                onClick={() => setCxcStatusFilter('all')}
+                className={`btn btn-sm ${cxcStatusFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '4px 10px', fontSize: '0.75rem', borderRadius: '20px' }}
+              >
+                Todas ({receivables.length})
+              </button>
+              <button
+                onClick={() => setCxcStatusFilter('current')}
+                className={`btn btn-sm ${cxcStatusFilter === 'current' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '0.75rem',
+                  borderRadius: '20px',
+                  borderColor: cxcStatusFilter === 'current' ? '#10b981' : undefined,
+                  background: cxcStatusFilter === 'current' ? '#10b981' : undefined,
+                  color: cxcStatusFilter === 'current' ? '#fff' : '#10b981'
+                }}
+              >
+                Al Día ({cxcTotals.currentCount})
+              </button>
+              <button
+                onClick={() => setCxcStatusFilter('overdue')}
+                className={`btn btn-sm ${cxcStatusFilter === 'overdue' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '0.75rem',
+                  borderRadius: '20px',
+                  borderColor: cxcStatusFilter === 'overdue' ? '#ef4444' : undefined,
+                  background: cxcStatusFilter === 'overdue' ? '#ef4444' : undefined,
+                  color: cxcStatusFilter === 'overdue' ? '#fff' : '#ef4444'
+                }}
+              >
+                En Mora ({cxcTotals.overdueCount})
+              </button>
+              <button
+                onClick={() => setCxcStatusFilter('critical')}
+                className={`btn btn-sm ${cxcStatusFilter === 'critical' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '0.75rem',
+                  borderRadius: '20px',
+                  borderColor: cxcStatusFilter === 'critical' ? '#f59e0b' : undefined,
+                  background: cxcStatusFilter === 'critical' ? '#f59e0b' : undefined,
+                  color: cxcStatusFilter === 'critical' ? '#fff' : '#f59e0b'
+                }}
+              >
+                +60d ({receivables.filter(r => (Number(r.days_overdue) || 0) > 60).length})
+              </button>
+
+              {(cxcSearch || cxcStatusFilter !== 'all' || cxcSalespersonFilter) && (
+                <button
+                  onClick={() => {
+                    setCxcSearch('');
+                    setCxcStatusFilter('all');
+                    setCxcSalespersonFilter('');
+                  }}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '4px 8px', fontSize: '0.75rem', borderRadius: '20px', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+                  title="Restablecer filtros"
+                >
+                  <RotateCcw size={12} style={{ marginRight: '4px' }} />
+                  Limpiar
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Receivables Table */}
           <div className="table-container">
             <table className="custom-table">
               <thead>
@@ -317,10 +777,14 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
               <tbody>
                 {loading ? (
                   <tr><td colSpan="9" style={{ textAlign: 'center', padding: '30px' }}>Cargando cuentas por cobrar...</td></tr>
-                ) : receivables.length === 0 ? (
-                  <tr><td colSpan="9" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay facturas con saldo pendiente.</td></tr>
+                ) : paginatedReceivables.length === 0 ? (
+                  <tr>
+                    <td colSpan="9" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                      No se encontraron facturas con los filtros seleccionados.
+                    </td>
+                  </tr>
                 ) : (
-                  receivables.map(r => {
+                  paginatedReceivables.map(r => {
                     const isOverdue = Number(r.days_overdue) > 0;
                     return (
                       <tr key={r.id} style={{ background: isOverdue ? 'rgba(239, 68, 68, 0.04)' : 'transparent' }}>
@@ -330,8 +794,8 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                         </td>
                         <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{r.customer_name}</td>
                         <td style={{ color: '#60a5fa', fontSize: '0.8rem' }}>{r.salesperson_name || 'Carlos Mendoza'}</td>
-                        <td>{r.issue_date}</td>
-                        <td style={{ color: isOverdue ? 'var(--danger)' : 'inherit', fontWeight: isOverdue ? 700 : 400 }}>{r.due_date}</td>
+                        <td>{formatFinanceDate(r.issue_date)}</td>
+                        <td style={{ color: isOverdue ? 'var(--danger)' : 'inherit', fontWeight: isOverdue ? 700 : 400 }}>{formatFinanceDate(r.due_date)}</td>
                         <td>RD$ {Number(r.amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
                         <td style={{ fontWeight: 800, color: '#38bdf8' }}>
                           RD$ {Number(r.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
@@ -360,6 +824,115 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {filteredReceivables.length > 0 && (
+            <div
+              className="card"
+              style={{
+                padding: '12px 18px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px',
+                marginTop: '4px'
+              }}
+            >
+              {/* Rows Per Page */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Mostrar</span>
+                <select
+                  className="select-control"
+                  value={cxcPageSize}
+                  onChange={(e) => {
+                    setCxcPageSize(Number(e.target.value));
+                    setCxcPage(1);
+                  }}
+                  style={{ width: '80px', height: '32px', fontSize: '0.8rem', padding: '0 8px' }}
+                >
+                  <option value={10}>10</option>
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>por página</span>
+              </div>
+
+              {/* Counter */}
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                Mostrando <strong style={{ color: 'var(--text-primary)' }}>{(cxcPage - 1) * cxcPageSize + 1}</strong> - <strong style={{ color: 'var(--text-primary)' }}>{Math.min(cxcPage * cxcPageSize, filteredReceivables.length)}</strong> de <strong style={{ color: 'var(--text-primary)' }}>{filteredReceivables.length}</strong> facturas por cobrar
+                {(cxcSearch || cxcStatusFilter !== 'all' || cxcSalespersonFilter) && (
+                  <span style={{ marginLeft: '6px', color: 'var(--text-muted)' }}>(filtradas)</span>
+                )}
+              </div>
+
+              {/* Navigation */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button
+                  onClick={() => setCxcPage(1)}
+                  disabled={cxcPage <= 1}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Primera página"
+                >
+                  <ChevronsLeft size={14} />
+                </button>
+
+                <button
+                  onClick={() => setCxcPage(p => Math.max(1, p - 1))}
+                  disabled={cxcPage <= 1}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Página anterior"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+
+                {cxcPageNumbers.map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setCxcPage(p)}
+                    style={{
+                      minWidth: '32px',
+                      height: '32px',
+                      borderRadius: '6px',
+                      border: p === cxcPage ? '1px solid #3b82f6' : '1px solid var(--border-color)',
+                      background: p === cxcPage ? '#3b82f6' : 'var(--bg-subtle)',
+                      color: p === cxcPage ? '#ffffff' : 'var(--text-primary)',
+                      fontWeight: p === cxcPage ? 700 : 500,
+                      fontSize: '0.82rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
+
+                <button
+                  onClick={() => setCxcPage(p => Math.min(totalCxcPages, p + 1))}
+                  disabled={cxcPage >= totalCxcPages}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Página siguiente"
+                >
+                  <ChevronRight size={14} />
+                </button>
+
+                <button
+                  onClick={() => setCxcPage(totalCxcPages)}
+                  disabled={cxcPage >= totalCxcPages}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Última página"
+                >
+                  <ChevronsRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -485,52 +1058,209 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
 
       {/* TAB 3: CXP PROVEEDORES */}
       {activeTab === 'cxp' && (
-        <div className="table-container">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>No. Factura Proveedor</th>
-                <th>Proveedor</th>
-                <th>Fecha Factura</th>
-                <th>Vencimiento</th>
-                <th>Total Facturado</th>
-                <th>Saldo Pendiente</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px' }}>Cargando cuentas por pagar...</td></tr>
-              ) : payables.length === 0 ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay facturas de compras pendientes.</td></tr>
-              ) : (
-                payables.map(p => (
-                  <tr key={p.id}>
-                    <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{p.invoice_number || `COMP-${p.purchase_id}`}</td>
-                    <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{p.supplier_name}</td>
-                    <td>{p.issue_date}</td>
-                    <td>{p.due_date}</td>
-                    <td>RD$ {Number(p.amount).toFixed(2)}</td>
-                    <td style={{ fontWeight: 800, color: '#f59e0b' }}>RD$ {Number(p.balance).toFixed(2)}</td>
-                    <td>
-                      <span className={`badge ${p.status === 'paid' ? 'badge-success' : 'badge-warning'}`}>{p.status}</span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* KPI Summary Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+            <div className="card" style={{ padding: '16px', borderLeft: '4px solid #ef4444' }}>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Total Deuda a Proveedores</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '4px' }}>
+                RD$ {payables.reduce((acc, p) => acc + Number(p.balance || 0), 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+              </div>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{payables.filter(p => Number(p.balance) > 0).length} factura(s) exigibles</span>
+            </div>
+
+            <div className="card" style={{ padding: '16px', borderLeft: '4px solid #dc2626' }}>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Deuda Vencida (En Mora)</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 900, color: '#ef4444', marginTop: '4px' }}>
+                RD$ {payables.filter(p => p.status === 'overdue' || Number(p.days_overdue || 0) > 0).reduce((acc, p) => acc + Number(p.balance || 0), 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+              </div>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Requiere pago inmediato</span>
+            </div>
+
+            <div className="card" style={{ padding: '16px', borderLeft: '4px solid #10b981' }}>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Al Día / Por Vencer</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 900, color: '#10b981', marginTop: '4px' }}>
+                RD$ {payables.filter(p => p.status !== 'overdue' && Number(p.days_overdue || 0) <= 0).reduce((acc, p) => acc + Number(p.balance || 0), 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+              </div>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Dentro del plazo de crédito acordado</span>
+            </div>
+          </div>
+
+          <div className="table-container">
+            <table className="custom-table">
+              <thead>
+                <tr>
+                  <th>No. Factura Proveedor</th>
+                  <th>Proveedor</th>
+                  <th>Fecha Emisión</th>
+                  <th>Vencimiento</th>
+                  <th style={{ textAlign: 'right' }}>Total Facturado</th>
+                  <th style={{ textAlign: 'right' }}>Saldo Pendiente</th>
+                  <th>Estado</th>
+                  <th style={{ textAlign: 'center' }}>Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px' }}>Cargando cuentas por pagar...</td></tr>
+                ) : payables.length === 0 ? (
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay facturas de compras pendientes.</td></tr>
+                ) : (
+                  payables.map(p => {
+                    const isOverdue = p.status === 'overdue' || Number(p.days_overdue || 0) > 0;
+                    return (
+                      <tr key={p.id}>
+                        <td style={{ fontWeight: 800, fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>
+                          <div>{p.document_number || p.invoice_number || `COMP-${p.purchase_id}`}</div>
+                          {p.purchase_order_number && (
+                            <span className="badge" style={{ fontSize: '0.68rem', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '1px 6px', marginTop: '3px', display: 'inline-block', fontWeight: 600 }}>
+                              OC: {p.purchase_order_number}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{p.supplier_name}</div>
+                          {p.supplier_tax_id && (
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>RNC: {p.supplier_tax_id}</span>
+                          )}
+                        </td>
+                        <td style={{ fontSize: '0.8rem' }}>{formatFinanceDate(p.issue_date)}</td>
+                        <td style={{ fontSize: '0.8rem' }}>{formatFinanceDate(p.due_date)}</td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          RD$ {Number(p.amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 800, color: '#f59e0b', fontVariantNumeric: 'tabular-nums' }}>
+                          RD$ {Number(p.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td>
+                          {isOverdue ? (
+                            <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              Vencida {Number(p.days_overdue) > 0 ? `(${p.days_overdue} d)` : ''}
+                            </span>
+                          ) : (
+                            <span className="badge badge-warning">Al Día</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenPaySupplier(p)}
+                            className="btn btn-primary btn-sm"
+                            style={{ padding: '0 10px', height: '28px', fontSize: '0.78rem', gap: '4px' }}
+                          >
+                            <HandCoins size={13} />
+                            <span>Pagar / Abonar</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* TAB 4: GASTOS */}
       {activeTab === 'expenses' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button onClick={() => setShowExpenseModal(true)} className="btn btn-primary">
-              <Plus size={16} />
-              <span>Registrar Gasto</span>
-            </button>
+          {/* Filters & Actions Toolbar */}
+          <div className="card" style={{ padding: '16px', display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ position: 'relative', width: '220px' }}>
+                <Search size={14} style={{ position: 'absolute', left: '10px', top: '11px', color: 'var(--text-muted)' }} />
+                <input
+                  type="text"
+                  className="input-control"
+                  placeholder="Buscar por beneficiario, notas..."
+                  value={expenseSearch}
+                  onChange={(e) => setExpenseSearch(e.target.value)}
+                  style={{ paddingLeft: '36px', height: '38px' }}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Categoría:</span>
+                <select
+                  className="select-control"
+                  value={expenseCategoryFilter}
+                  onChange={(e) => setExpenseCategoryFilter(e.target.value)}
+                  style={{ width: '200px', height: '38px' }}
+                >
+                  <option value="">Todas</option>
+                  {expenseCategories.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Estado:</span>
+                <select
+                  className="select-control"
+                  value={expenseStatusFilter}
+                  onChange={(e) => setExpenseStatusFilter(e.target.value)}
+                  style={{ width: '160px', height: '38px' }}
+                >
+                  <option value="all">Todos</option>
+                  <option value="active">Activos</option>
+                  <option value="cancelled">Anulados</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Desde:</span>
+                <input
+                  type="date"
+                  className="input-control"
+                  value={expenseDateFrom}
+                  onChange={(e) => setExpenseDateFrom(e.target.value)}
+                  style={{ width: '160px', height: '38px', fontSize: '0.8rem' }}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Hasta:</span>
+                <input
+                  type="date"
+                  className="input-control"
+                  value={expenseDateTo}
+                  onChange={(e) => setExpenseDateTo(e.target.value)}
+                  style={{ width: '160px', height: '38px', fontSize: '0.8rem' }}
+                />
+              </div>
+              <button
+                onClick={() => {
+                  setExpenseSearch('');
+                  setExpenseCategoryFilter('');
+                  setExpenseDateFrom('');
+                  setExpenseDateTo('');
+                  setExpenseStatusFilter('all');
+                  setExpensePage(1);
+                  loadExpenses();
+                }}
+                className="btn btn-secondary btn-sm"
+                style={{ height: '38px' }}
+              >
+                <X size={14} />
+                <span>Limpiar</span>
+              </button>
+              <button
+                onClick={handleExportExpensesCSV}
+                className="btn btn-secondary"
+                style={{ height: '38px', gap: '6px' }}
+              >
+                <Download size={16} />
+                <span>Exportar CSV</span>
+              </button>
+              <button
+                onClick={() => setShowExpenseModal(true)}
+                className="btn btn-primary"
+                style={{ height: '38px', background: 'linear-gradient(135deg, #8b5cf6, #6d28d9)' }}
+              >
+                <Plus size={16} />
+                <span>Registrar Gasto</span>
+              </button>
+            </div>
           </div>
 
           <div className="table-container">
@@ -543,14 +1273,15 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                   <th>Monto</th>
                   <th>Método</th>
                   <th>Comprobante</th>
+                  <th>Estado</th>
                   <th>Notas</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px' }}>Cargando gastos...</td></tr>
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px' }}>Cargando gastos...</td></tr>
                 ) : expenses.length === 0 ? (
-                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay gastos registrados.</td></tr>
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay gastos registrados.</td></tr>
                 ) : (
                   expenses.map(e => (
                     <tr key={e.id}>
@@ -564,6 +1295,11 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                       <td style={{ fontWeight: 800, color: '#f59e0b' }}>RD$ {Number(e.amount).toFixed(2)}</td>
                       <td style={{ textTransform: 'capitalize' }}>{e.payment_method}</td>
                       <td style={{ fontFamily: 'var(--font-mono)' }}>{e.voucher_number || '-'}</td>
+                      <td>
+                        <span className={`badge ${e.status === 'cancelled' ? 'badge-danger' : 'badge-success'}`}>
+                          {e.status === 'cancelled' ? 'Anulado' : 'Activo'}
+                        </span>
+                      </td>
                       <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{e.notes || '-'}</td>
                     </tr>
                   ))
@@ -571,6 +1307,78 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          {expenses.length > 0 && (
+            <div className="card" style={{ padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Mostrar</span>
+                <select
+                  className="select-control"
+                  value={expensePageSize}
+                  onChange={(e) => {
+                    setExpensePageSize(Number(e.target.value));
+                    setExpensePage(1);
+                    loadExpenses();
+                  }}
+                  style={{ width: '80px', height: '32px', fontSize: '0.8rem', padding: '0 8px' }}
+                >
+                  <option value={10}>10</option>
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>por página</span>
+              </div>
+
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                Mostrando <strong style={{ color: 'var(--text-primary)' }}>{(expensePage - 1) * expensePageSize + 1}</strong> - <strong style={{ color: 'var(--text-primary)' }}>{Math.min(expensePage * expensePageSize, expenses.length)}</strong> de <strong style={{ color: 'var(--text-primary)' }}>{expenses.length}</strong> gastos
+                {(expenseSearch || expenseCategoryFilter || expenseStatusFilter !== 'all' || expenseDateFrom || expenseDateTo) && (
+                  <span style={{ marginLeft: '6px', color: 'var(--text-muted)' }}>(filtrados)</span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button
+                  onClick={() => setExpensePage(1)}
+                  disabled={expensePage <= 1}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Primera página"
+                >
+                  <ChevronsLeft size={14} />
+                </button>
+                <button
+                  onClick={() => setExpensePage(p => Math.max(1, p - 1))}
+                  disabled={expensePage <= 1}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Página anterior"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <button
+                  onClick={() => setExpensePage(p => Math.min(Math.ceil(expenses.length / expensePageSize), p + 1))}
+                  disabled={expensePage >= Math.ceil(expenses.length / expensePageSize)}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Página siguiente"
+                >
+                  <ChevronRight size={14} />
+                </button>
+                <button
+                  onClick={() => setExpensePage(Math.ceil(expenses.length / expensePageSize))}
+                  disabled={expensePage >= Math.ceil(expenses.length / expensePageSize)}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Última página"
+                >
+                  <ChevronsRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -905,6 +1713,17 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                 />
               </div>
 
+              <div>
+                <label className="label-control">Fecha del Gasto *</label>
+                <input
+                  type="date"
+                  required
+                  className="input-control"
+                  value={expenseData.expense_date}
+                  onChange={(e) => setExpenseData({ ...expenseData, expense_date: e.target.value })}
+                />
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div>
                   <label className="label-control">Método de Pago</label>
@@ -947,6 +1766,149 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
                 </button>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
                   Guardar Gasto
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* PAY SUPPLIER MODAL (CXP) */}
+      {showPaySupplierModal && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-content" style={{ maxWidth: '520px', width: '92%', padding: '24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', marginBottom: '18px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(2, 132, 199, 0.15)', color: '#0284c7', padding: '8px', borderRadius: '10px' }}>
+                  <HandCoins size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
+                    Registrar Pago a Proveedor
+                  </h3>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
+                    Abono o liquidación de factura de compra a crédito
+                  </p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setShowPaySupplierModal(false)} className="btn btn-ghost btn-sm" style={{ padding: '6px' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleProcessPaySupplier} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* Invoice Selector */}
+              <div>
+                <label className="label-control">Factura de Compra / Proveedor *</label>
+                <select
+                  required
+                  className="select-control"
+                  value={selectedPayable?.id || ''}
+                  onChange={(e) => {
+                    const payId = Number(e.target.value);
+                    const found = payables.find(p => p.id === payId);
+                    if (found) {
+                      setSelectedPayable(found);
+                      setPaySupplierAmount(String(found.balance || ''));
+                    }
+                  }}
+                >
+                  <option value="">Seleccione factura...</option>
+                  {payables.filter(p => Number(p.balance) > 0).map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.document_number || p.invoice_number} — {p.supplier_name} (Pendiente: RD$ {Number(p.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Selected Invoice Details Pill */}
+              {selectedPayable && (
+                <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', fontSize: '0.82rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Proveedor:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{selectedPayable.supplier_name}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Fecha de Vencimiento:</span>
+                    <span style={{ color: selectedPayable.status === 'overdue' ? '#ef4444' : 'var(--text-primary)', fontWeight: 600 }}>
+                      {formatFinanceDate(selectedPayable.due_date)}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '6px', marginTop: '6px' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>Saldo Pendiente:</span>
+                    <span style={{ color: '#f59e0b', fontWeight: 900, fontSize: '0.95rem' }}>
+                      RD$ {Number(selectedPayable.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Amount to Pay */}
+              <div>
+                <label className="label-control">Monto a Pagar (RD$) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max={selectedPayable ? Number(selectedPayable.balance) : undefined}
+                  required
+                  className="input-control"
+                  placeholder="0.00"
+                  value={paySupplierAmount}
+                  onChange={(e) => setPaySupplierAmount(e.target.value)}
+                  style={{ fontWeight: 800, fontSize: '1.05rem', color: '#10b981' }}
+                />
+              </div>
+
+              {/* Method and Reference */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div>
+                  <label className="label-control">Forma de Pago</label>
+                  <select
+                    className="select-control"
+                    value={paySupplierMethod}
+                    onChange={(e) => setPaySupplierMethod(e.target.value)}
+                  >
+                    <option value="transfer">Transferencia Bancaria</option>
+                    <option value="cash">Efectivo</option>
+                    <option value="check">Cheque Comercial</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label-control">No. Referencia / Comprobante</label>
+                  <input
+                    type="text"
+                    className="input-control"
+                    placeholder="Ej: TRANSF-0912"
+                    value={paySupplierRef}
+                    onChange={(e) => setPaySupplierRef(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="label-control">Notas / Observaciones</label>
+                <input
+                  type="text"
+                  className="input-control"
+                  placeholder="Detalle o justificación del pago al proveedor"
+                  value={paySupplierNotes}
+                  onChange={(e) => setPaySupplierNotes(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                <button type="button" onClick={() => setShowPaySupplierModal(false)} className="btn btn-secondary" style={{ flex: 1 }}>
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingPaySupplier || !selectedPayable}
+                  className="btn btn-primary"
+                  style={{ flex: 1, background: 'linear-gradient(135deg, #0284c7, #0369a1)', fontWeight: 700 }}
+                >
+                  {submittingPaySupplier ? 'Aplicando Pago...' : 'Aplicar Pago a Proveedor'}
                 </button>
               </div>
             </form>

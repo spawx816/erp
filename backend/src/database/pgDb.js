@@ -26,7 +26,16 @@ pool.on('error', (err) => {
 // Helper to convert SQLite '?' placeholders and dialect to PostgreSQL
 function convertSqliteToPostgres(sql) {
   let paramIndex = 1;
-  let converted = sql.replace(/\?/g, () => `$${paramIndex++}`);
+  // Match string literals '...', single-line comments --, multi-line comments /* */, or ? placeholders
+  let converted = sql.replace(/('(?:''|[^'])*')|(--[^\r\n]*)|(\/\*[\s\S]*?\*\/)|(\?)/g, (match, str, singleLineComment, multiLineComment, qMark) => {
+    if (str || singleLineComment || multiLineComment) {
+      return match;
+    }
+    if (qMark) {
+      return `$${paramIndex++}`;
+    }
+    return match;
+  });
 
   // Replace SQLite specific date arithmetic if present
   converted = converted.replace(/CAST\s*\(\s*\(\s*julianday\('now'\)\s*-\s*julianday\(([^)]+)\)\s*\)\s*AS\s*INTEGER\s*\)/gi, 
@@ -139,7 +148,9 @@ const db = {
 
           return {
             lastInsertRowid,
-            changes: res.rowCount
+            changes: res.rowCount,
+            row: res.rows && res.rows.length > 0 ? res.rows[0] : null,
+            rows: res.rows || []
           };
         } catch (err) {
           console.error('❌ Database prepare.run error:', err.message, '\nSQL:', formattedSql, '\nParams:', flatParams);
@@ -197,7 +208,12 @@ function makeClientDb(client) {
         try {
           const res = await client.query(formattedSql, flatParams);
           const lastInsertRowid = res.rows && res.rows.length > 0 && res.rows[0].id ? res.rows[0].id : null;
-          return { lastInsertRowid, changes: res.rowCount };
+          return {
+            lastInsertRowid,
+            changes: res.rowCount,
+            row: res.rows && res.rows.length > 0 ? res.rows[0] : null,
+            rows: res.rows || []
+          };
         } catch (err) {
           console.error('❌ TX prepare.run error:', err.message, '\nSQL:', formattedSql);
           throw err;

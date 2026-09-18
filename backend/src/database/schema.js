@@ -111,17 +111,19 @@ function initSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       user_id INTEGER REFERENCES users(id),
-      code TEXT NOT NULL UNIQUE,
+      code TEXT NOT NULL,
       name TEXT NOT NULL,
       phone TEXT,
       email TEXT,
       zone TEXT,
       monthly_goal DECIMAL(14,2) DEFAULT 200000.00,
       commission_rate DECIMAL(5,2) DEFAULT 5.00,
+      commission_calculation_type TEXT DEFAULT 'invoiced', -- invoiced, collected
       hire_date DATE,
       status TEXT DEFAULT 'active',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(company_id, code)
     );
 
     -- 4. CATALOG & CLASSIFICATION
@@ -478,6 +480,7 @@ function initSchema() {
       branch_id INTEGER NOT NULL REFERENCES branches(id),
       supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
       purchase_id INTEGER REFERENCES purchases(id),
+      purchase_order_id INTEGER REFERENCES purchase_orders(id),
       document_number TEXT NOT NULL,
       issue_date DATE NOT NULL,
       due_date DATE NOT NULL,
@@ -493,6 +496,7 @@ function initSchema() {
       payable_id INTEGER NOT NULL REFERENCES accounts_payable(id) ON DELETE CASCADE,
       company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id),
+      cash_session_id INTEGER REFERENCES cash_sessions(id),
       payment_date DATE NOT NULL,
       amount DECIMAL(14,4) NOT NULL,
       payment_method TEXT NOT NULL, -- cash, transfer, check
@@ -809,6 +813,7 @@ function initSchema() {
       voucher_file_url TEXT,
       notes TEXT,
       expense_date DATE NOT NULL,
+      status TEXT DEFAULT 'active', -- active, cancelled
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -826,7 +831,8 @@ function initSchema() {
       alert_days_before INTEGER DEFAULT 7,
       status TEXT DEFAULT 'pending', -- pending, upcoming, overdue, paid
       last_paid_date DATE,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      CHECK (due_day >= 1 AND due_day <= 31)
     );
 
     -- 14. SALES COMMISSIONS

@@ -292,14 +292,46 @@ const reportsController = {
 
       // 7. Top Selling Products
       const topProducts = (await db.prepare(`
-        SELECT si.product_name, SUM(si.quantity) as units_sold, SUM(si.total) as total_revenue
+        SELECT si.product_id, si.product_name, p.sku, p.line,
+               SUM(si.quantity) as units_sold, SUM(si.total) as total_revenue
         FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
+        LEFT JOIN products p ON p.id = si.product_id
         WHERE s.company_id = ? AND s.status != 'cancelled' ${dateFilterSales} ${branchFilterSales} ${salespersonFilter}
-        GROUP BY si.product_id, si.product_name
+        GROUP BY si.product_id, si.product_name, p.sku, p.line
         ORDER BY total_revenue DESC
         LIMIT 6
       `).all(companyId, ...branchParams, ...salespersonParams)) || [];
+
+      // 7b. Least Selling Products / Slow Movers (Productos con menor venta o estancados con stock)
+      let leastProducts = [];
+      try {
+        leastProducts = (await db.prepare(`
+          SELECT p.id as product_id, p.name as product_name, p.sku, p.line,
+                 COALESCE(SUM(inv.quantity), 0) as current_stock,
+                 COALESCE(p.cost, 0) as cost,
+                 COALESCE(sales_sub.units_sold, 0) as units_sold,
+                 COALESCE(sales_sub.total_revenue, 0) as total_revenue
+          FROM products p
+          JOIN inventories inv ON inv.product_id = p.id
+          LEFT JOIN (
+            SELECT si.product_id,
+                   SUM(si.quantity) as units_sold,
+                   SUM(si.total) as total_revenue
+            FROM sale_items si
+            JOIN sales s ON si.sale_id = s.id
+            WHERE s.company_id = ? AND s.status != 'cancelled' ${dateFilterSales} ${branchFilterSales} ${salespersonFilter}
+            GROUP BY si.product_id
+          ) sales_sub ON sales_sub.product_id = p.id
+          WHERE p.company_id = ? AND p.status = 'active'
+          GROUP BY p.id, p.name, p.sku, p.line, p.cost, sales_sub.units_sold, sales_sub.total_revenue
+          HAVING COALESCE(SUM(inv.quantity), 0) > 0
+          ORDER BY units_sold ASC, (p.cost * COALESCE(SUM(inv.quantity), 0)) DESC
+          LIMIT 6
+        `).all(companyId, ...branchParams, ...salespersonParams, companyId)) || [];
+      } catch (errLeast) {
+        console.error('Error fetching leastProducts:', errLeast);
+      }
 
       // 8. Top Customers by Purchase Volume
       const topCustomers = (await db.prepare(`
@@ -471,6 +503,9 @@ const reportsController = {
             },
             expenses_by_category: expensesByCategory,
             top_products: topProducts,
+            least_products: leastProducts,
+            top_product: topProducts && topProducts.length > 0 ? topProducts[0] : null,
+            least_product: leastProducts && leastProducts.length > 0 ? leastProducts[0] : null,
             top_customers: topCustomers,
             sales_12_months: Array.isArray(sales12Months) ? [...sales12Months].reverse() : []
           },
@@ -490,8 +525,12 @@ const reportsController = {
       const month = parseInt(req.query.month || 9, 10);
       const year = parseInt(req.query.year || 2026, 10);
 
-      const monthStr = String(month).padStart(2, '0');
-      const curFilter = `${year}-${monthStr}`;
+      const monthNum = parseInt(month, 10);
+      const yearNum = parseInt(year, 10);
+      const startDate = `${yearNum}-${String(monthNum).padStart(2, '0')}-01`;
+      const nextMonthYear = monthNum === 12 ? yearNum + 1 : yearNum;
+      const nextMonthNum = monthNum === 12 ? 1 : monthNum + 1;
+      const endDate = `${nextMonthYear}-${String(nextMonthNum).padStart(2, '0')}-01`;
 
       // Check if officially closed
       const officialClosing = await db.prepare(`
@@ -499,73 +538,74 @@ const reportsController = {
         WHERE company_id = ? AND month = ? AND year = ?
       `).get(companyId, month, year);
 
-      // Dynamic calculation for the selected month
+      // Dynamic calculation for the selected month with index-friendly date ranges
       const sales = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total,
                COALESCE(SUM(discount_amount), 0) as discounts,
                COALESCE(SUM(subtotal), 0) as net_sales
         FROM sales
-        WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
-      `).get(companyId, curFilter);
+        WHERE company_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'
+      `).get(companyId, startDate, endDate);
 
       const collectionsRow = await db.prepare(`
         SELECT (
-          COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND strftime('%Y-%m', payment_date) = ?), 0) +
-          COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND sp.payment_method != 'credit'), 0)
+          COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND payment_date >= ? AND payment_date < ?), 0) +
+          COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND s.created_at >= ? AND s.created_at < ? AND sp.payment_method != 'credit'), 0)
         ) as total
-      `).get(companyId, curFilter, companyId, curFilter);
+      `).get(companyId, startDate, endDate, companyId, startDate, endDate);
       const collections = collectionsRow ? Number(collectionsRow.total) || 0 : 0;
 
       const creditNotesRow = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total
         FROM credit_notes
-        WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?
-      `).get(companyId, curFilter);
+        WHERE company_id = ? AND created_at >= ? AND created_at < ?
+      `).get(companyId, startDate, endDate);
       const creditNotes = creditNotesRow ? Number(creditNotesRow.total) || 0 : 0;
 
       const purchasesRow = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total
         FROM purchases
-        WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
-      `).get(companyId, curFilter);
+        WHERE company_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'
+      `).get(companyId, startDate, endDate);
       const purchases = purchasesRow ? Number(purchasesRow.total) || 0 : 0;
 
       const cogsRow = await db.prepare(`
         SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total
         FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
-        WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND s.status != 'cancelled'
-      `).get(companyId, curFilter);
+        WHERE s.company_id = ? AND s.created_at >= ? AND s.created_at < ? AND s.status != 'cancelled'
+      `).get(companyId, startDate, endDate);
       const cogs = cogsRow ? Number(cogsRow.total) || 0 : 0;
 
       const operatingExpensesRow = await db.prepare(`
         SELECT COALESCE(SUM(amount), 0) as total
         FROM expenses
-        WHERE company_id = ? AND strftime('%Y-%m', expense_date) = ?
-      `).get(companyId, curFilter);
+        WHERE company_id = ? AND expense_date >= ? AND expense_date < ?
+      `).get(companyId, startDate, endDate);
       const operatingExpenses = operatingExpensesRow ? Number(operatingExpensesRow.total) || 0 : 0;
 
       const commissionsRow = await db.prepare(`
         SELECT COALESCE(SUM(commission_amount), 0) as total
         FROM commissions
-        WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?
-      `).get(companyId, curFilter);
+        WHERE company_id = ? AND created_at >= ? AND created_at < ?
+      `).get(companyId, startDate, endDate);
       const commissions = commissionsRow ? Number(commissionsRow.total) || 0 : 0;
 
       const grossProfit = (sales?.net_sales || 0) - cogs;
       const netProfit = grossProfit - operatingExpenses - commissions;
 
       // Prior month comparison
-      let prevMonth = month - 1;
-      let prevYear = year;
+      let prevMonth = monthNum - 1;
+      let prevYear = yearNum;
       if (prevMonth === 0) { prevMonth = 12; prevYear--; }
-      const prevFilter = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+      const prevStartDate = `${prevYear}-${String(prevMonth).padStart(2, '0')}-01`;
+      const prevEndDate = startDate;
 
       const prevSalesRow = await db.prepare(`
         SELECT COALESCE(SUM(total), 0) as total
         FROM sales
-        WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
-      `).get(companyId, prevFilter);
+        WHERE company_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'
+      `).get(companyId, prevStartDate, prevEndDate);
       const prevSales = prevSalesRow ? Number(prevSalesRow.total) || 0 : 0;
 
       const prevClosingRow = await db.prepare(`
@@ -658,65 +698,90 @@ const reportsController = {
   },
 
   getMonthlyClosingSync: async (companyId, month, year) => {
-    const curFilter = `${year}-${String(month).padStart(2, '0')}`;
-    const s = (await db.prepare(`SELECT COALESCE(SUM(total), 0) as total, COALESCE(SUM(subtotal), 0) as net_sales, COALESCE(SUM(discount_amount), 0) as discounts FROM sales WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'`).get(companyId, curFilter)) || { total: 0, net_sales: 0, discounts: 0 };
+    const monthNum = parseInt(month, 10);
+    const yearNum = parseInt(year, 10);
+    const startDate = `${yearNum}-${String(monthNum).padStart(2, '0')}-01`;
+    const nextMonthYear = monthNum === 12 ? yearNum + 1 : yearNum;
+    const nextMonthNum = monthNum === 12 ? 1 : monthNum + 1;
+    const endDate = `${nextMonthYear}-${String(nextMonthNum).padStart(2, '0')}-01`;
+
+    let prevMonth = monthNum - 1;
+    let prevYear = yearNum;
+    if (prevMonth === 0) { prevMonth = 12; prevYear--; }
+    const prevStartDate = `${prevYear}-${String(prevMonth).padStart(2, '0')}-01`;
+    const prevEndDate = startDate;
+
+    const s = (await db.prepare(`
+      SELECT COALESCE(SUM(total), 0) as total,
+             COALESCE(SUM(subtotal), 0) as net_sales,
+             COALESCE(SUM(discount_amount), 0) as discounts
+      FROM sales
+      WHERE company_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'
+    `).get(companyId, startDate, endDate)) || { total: 0, net_sales: 0, discounts: 0 };
     
     // Real collections query (#16)
     const collectionsRow = await db.prepare(`
       SELECT (
-        COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND strftime('%Y-%m', payment_date) = ?), 0) +
-        COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND sp.payment_method != 'credit'), 0)
+        COALESCE((SELECT SUM(total_amount) FROM receivable_payments WHERE company_id = ? AND payment_date >= ? AND payment_date < ?), 0) +
+        COALESCE((SELECT SUM(amount) FROM sale_payments sp JOIN sales s ON sp.sale_id = s.id WHERE s.company_id = ? AND s.created_at >= ? AND s.created_at < ? AND sp.payment_method != 'credit'), 0)
       ) as total
-    `).get(companyId, curFilter, companyId, curFilter);
+    `).get(companyId, startDate, endDate, companyId, startDate, endDate);
     const collections = collectionsRow ? Number(collectionsRow.total) || 0 : 0;
 
     // Real credit notes (#16)
     const creditNotesRow = await db.prepare(`
       SELECT COALESCE(SUM(total), 0) as total
       FROM credit_notes
-      WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?
-    `).get(companyId, curFilter);
+      WHERE company_id = ? AND created_at >= ? AND created_at < ?
+    `).get(companyId, startDate, endDate);
     const creditNotes = creditNotesRow ? Number(creditNotesRow.total) || 0 : 0;
 
     // Real purchases (#16)
     const purchasesRow = await db.prepare(`
       SELECT COALESCE(SUM(total), 0) as total
       FROM purchases
-      WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
-    `).get(companyId, curFilter);
+      WHERE company_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'
+    `).get(companyId, startDate, endDate);
     const purchases = purchasesRow ? Number(purchasesRow.total) || 0 : 0;
 
     // Real pending receivables for this month (#16)
     const pendingReceivablesRow = await db.prepare(`
       SELECT COALESCE(SUM(balance), 0) as total
       FROM accounts_receivable
-      WHERE company_id = ? AND strftime('%Y-%m', issue_date) = ? AND status != 'paid'
-    `).get(companyId, curFilter);
+      WHERE company_id = ? AND issue_date >= ? AND issue_date < ? AND status != 'paid'
+    `).get(companyId, startDate, endDate);
     const pendingReceivables = pendingReceivablesRow ? Number(pendingReceivablesRow.total) || 0 : 0;
 
-    const expRow = await db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE company_id = ? AND strftime('%Y-%m', expense_date) = ?`).get(companyId, curFilter);
+    const expRow = await db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total
+      FROM expenses
+      WHERE company_id = ? AND expense_date >= ? AND expense_date < ?
+    `).get(companyId, startDate, endDate);
     const exp = expRow ? Number(expRow.total) || 0 : 0;
 
-    const cogsRow = await db.prepare(`SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE s.company_id = ? AND strftime('%Y-%m', s.created_at) = ? AND s.status != 'cancelled'`).get(companyId, curFilter);
+    const cogsRow = await db.prepare(`
+      SELECT COALESCE(SUM(si.unit_cost * si.quantity), 0) as total
+      FROM sale_items si
+      JOIN sales s ON si.sale_id = s.id
+      WHERE s.company_id = ? AND s.created_at >= ? AND s.created_at < ? AND s.status != 'cancelled'
+    `).get(companyId, startDate, endDate);
     const cogs = cogsRow ? Number(cogsRow.total) || 0 : 0;
 
-    const commRow = await db.prepare(`SELECT COALESCE(SUM(commission_amount), 0) as total FROM commissions WHERE company_id = ? AND strftime('%Y-%m', created_at) = ?`).get(companyId, curFilter);
+    const commRow = await db.prepare(`
+      SELECT COALESCE(SUM(commission_amount), 0) as total
+      FROM commissions
+      WHERE company_id = ? AND created_at >= ? AND created_at < ?
+    `).get(companyId, startDate, endDate);
     const comm = commRow ? Number(commRow.total) || 0 : 0;
 
     const gp = Number(s.net_sales || 0) - cogs;
     const np = gp - exp - comm;
 
-    // Prior month calculation
-    let prevMonth = month - 1;
-    let prevYear = year;
-    if (prevMonth === 0) { prevMonth = 12; prevYear--; }
-    const prevFilter = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
-
     const prevSalesRow = await db.prepare(`
       SELECT COALESCE(SUM(total), 0) as total
       FROM sales
-      WHERE company_id = ? AND strftime('%Y-%m', created_at) = ? AND status != 'cancelled'
-    `).get(companyId, prevFilter);
+      WHERE company_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'
+    `).get(companyId, prevStartDate, prevEndDate);
     const prevSales = prevSalesRow ? Number(prevSalesRow.total) || 0 : 0;
 
     const prevClosingRow = await db.prepare(`

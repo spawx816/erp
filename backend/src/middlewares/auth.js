@@ -23,7 +23,7 @@ async function authenticateToken(req, res, next) {
     const user = await db.prepare(`
       SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email, u.max_discount_percentage, u.status, u.token_version,
              r.name as role_name, r.slug as role_slug,
-             c.name as company_name, c.currency, c.currency_symbol, c.allow_negative_inventory
+             c.name as company_name, c.currency, c.currency_symbol, c.allow_negative_inventory, c.cash_requires_open_session
       FROM users u
       JOIN roles r ON u.role_id = r.id
       JOIN companies c ON u.company_id = c.id

@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Warehouse, ArrowRightLeft, Sliders, History, Search,
   Plus, CheckCircle, AlertTriangle, X, Layers, Activity,
   Calendar, Package, Clock, CheckCircle2, AlertCircle,
-  Filter, Tag
+  Filter, Tag, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
@@ -20,12 +20,17 @@ export default function InventoryPage({ initialTab = 'stock' }) {
   const [lotsList, setLotsList] = useState([]);
   const [analysisData, setAnalysisData] = useState(null);
   const [noMovementDays, setNoMovementDays] = useState('60');
+  const [analysisPage, setAnalysisPage] = useState(1);
+  const [analysisPageSize, setAnalysisPageSize] = useState(15);
+  const [analysisClassFilter, setAnalysisClassFilter] = useState('all'); // 'all' | 'alta' | 'media' | 'sin_movimiento'
   const [transfers, setTransfers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [selectedWarehouse, setSelectedWarehouse] = useState('');
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+
+  const [kardexMovementType, setKardexMovementType] = useState('all');
 
   // Modals
   const [showAdjustModal, setShowAdjustModal] = useState(false);
@@ -35,7 +40,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
   const [adjustData, setAdjustData] = useState({
     warehouse_id: '',
     product_id: '',
-    adjustment_type: 'in', // 'in' | 'out'
+    adjustment_type: 'in', // 'in' | 'out' | 'physical_count' | 'purchase_return' | 'initial'
     quantity: '1',
     unit_cost: '0',
     reason: ''
@@ -59,7 +64,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
     if (activeTab === 'lots') loadLots();
     if (activeTab === 'analysis') loadAnalysis();
     if (activeTab === 'transfers') loadTransfers();
-  }, [activeTab, selectedWarehouse, noMovementDays, search]);
+  }, [activeTab, selectedWarehouse, noMovementDays, search, kardexMovementType]);
 
   const loadMeta = async () => {
     try {
@@ -89,7 +94,11 @@ export default function InventoryPage({ initialTab = 'stock' }) {
   const loadKardex = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/inventory/kardex', { warehouse_id: selectedWarehouse, search });
+      const res = await api.get('/inventory/kardex', {
+        warehouse_id: selectedWarehouse,
+        movement_type: kardexMovementType !== 'all' ? kardexMovementType : undefined,
+        search
+      });
       if (res.success) setKardexList(res.data);
     } catch (err) {
       console.error(err);
@@ -134,6 +143,61 @@ export default function InventoryPage({ initialTab = 'stock' }) {
     }
   };
 
+  // Filtrado y Paginación para Análisis de Rotación
+  useEffect(() => {
+    setAnalysisPage(1);
+  }, [noMovementDays, analysisClassFilter, search]);
+
+  const filteredAnalysisProducts = useMemo(() => {
+    if (!analysisData?.products) return [];
+    let list = analysisData.products;
+
+    if (analysisClassFilter !== 'all') {
+      list = list.filter(p => p.rotation_class === analysisClassFilter);
+    }
+
+    if (search && search.trim()) {
+      const q = search.toLowerCase().trim();
+      list = list.filter(p =>
+        (p.name && p.name.toLowerCase().includes(q)) ||
+        (p.sku && p.sku.toLowerCase().includes(q)) ||
+        (p.brand_name && p.brand_name.toLowerCase().includes(q)) ||
+        (p.line && p.line.toLowerCase().includes(q))
+      );
+    }
+
+    return list;
+  }, [analysisData?.products, analysisClassFilter, search]);
+
+  const totalAnalysisPages = Math.max(1, Math.ceil(filteredAnalysisProducts.length / analysisPageSize));
+
+  useEffect(() => {
+    if (analysisPage > totalAnalysisPages) {
+      setAnalysisPage(1);
+    }
+  }, [totalAnalysisPages, analysisPage]);
+
+  const paginatedAnalysisProducts = useMemo(() => {
+    const start = (analysisPage - 1) * analysisPageSize;
+    return filteredAnalysisProducts.slice(start, start + analysisPageSize);
+  }, [filteredAnalysisProducts, analysisPage, analysisPageSize]);
+
+  const analysisPageNumbers = useMemo(() => {
+    const pages = [];
+    const maxButtons = 5;
+    let start = Math.max(1, analysisPage - 2);
+    let end = Math.min(totalAnalysisPages, start + maxButtons - 1);
+
+    if (end - start < maxButtons - 1) {
+      start = Math.max(1, end - maxButtons + 1);
+    }
+
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
+    return pages;
+  }, [analysisPage, totalAnalysisPages]);
+
   const handleAdjustSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -151,15 +215,51 @@ export default function InventoryPage({ initialTab = 'stock' }) {
   const handleTransferSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await api.post('/inventory/transfers', transferData);
+      const validItems = transferData.items.filter(i => i.product_id && Number(i.quantity) > 0);
+      if (validItems.length === 0) {
+        return addToast('Debe agregar al menos un producto con cantidad válida.', 'warning');
+      }
+      const res = await api.post('/inventory/transfers', {
+        ...transferData,
+        items: validItems
+      });
       if (res.success) {
         addToast('Transferencia creada exitosamente.', 'success');
         setShowTransferModal(false);
+        setTransferData({
+          from_warehouse_id: '',
+          to_warehouse_id: '',
+          notes: '',
+          items: [{ product_id: '', quantity: '1' }]
+        });
         loadTransfers();
       }
     } catch (err) {
       addToast(err.message || 'Error en transferencia.', 'error');
     }
+  };
+
+  const handleAddTransferItem = () => {
+    setTransferData(prev => ({
+      ...prev,
+      items: [...prev.items, { product_id: '', quantity: '1' }]
+    }));
+  };
+
+  const handleRemoveTransferItem = (idx) => {
+    if (transferData.items.length <= 1) return;
+    setTransferData(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== idx)
+    }));
+  };
+
+  const handleTransferItemChange = (idx, field, value) => {
+    setTransferData(prev => {
+      const newItems = [...prev.items];
+      newItems[idx] = { ...newItems[idx], [field]: value };
+      return { ...prev, items: newItems };
+    });
   };
 
   const handleReceiveTransfer = async (id) => {
@@ -295,6 +395,30 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                 {warehouses.map(w => (
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
+              </select>
+            </div>
+          )}
+
+          {activeTab === 'kardex' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Tipo Mov.:</span>
+              <select
+                className="select-control"
+                value={kardexMovementType}
+                onChange={(e) => setKardexMovementType(e.target.value)}
+                style={{ width: '190px', height: '36px', fontSize: '0.78rem' }}
+              >
+                <option value="all">Todos los Movimientos</option>
+                <option value="physical_count">Conteo Físico</option>
+                <option value="adjustment_in">Ajuste Entrada (+)</option>
+                <option value="adjustment_out">Ajuste Salida (-)</option>
+                <option value="initial">Inventario Inicial</option>
+                <option value="purchase">Compra de Mercancía</option>
+                <option value="purchase_return">Devolución a Proveedor</option>
+                <option value="sale">Venta POS / Factura</option>
+                <option value="sale_return">Devolución de Cliente</option>
+                <option value="transfer_in">Transferencia (Entrada)</option>
+                <option value="transfer_out">Transferencia (Salida)</option>
               </select>
             </div>
           )}
@@ -513,32 +637,156 @@ export default function InventoryPage({ initialTab = 'stock' }) {
 
           {/* Summary KPIs */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
-            <div className="card" style={{ padding: '16px', textAlign: 'center' }}>
+            <div
+              className="card"
+              onClick={() => setAnalysisClassFilter('all')}
+              style={{
+                padding: '16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                borderColor: analysisClassFilter === 'all' ? '#3b82f6' : 'var(--border-color)',
+                background: analysisClassFilter === 'all' ? 'rgba(59, 130, 246, 0.08)' : undefined,
+                boxShadow: analysisClassFilter === 'all' ? '0 0 0 1px #3b82f6' : 'none'
+              }}
+              title="Click para ver todos los productos"
+            >
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Valoración Total Inventario</span>
               <p style={{ fontSize: '1.4rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '4px' }}>
                 RD$ {Number(analysisData.kpis?.total_valuation || analysisData.totals?.total_valuation || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
               </p>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                {analysisData.products?.length || 0} productos analizados
+              </span>
             </div>
 
-            <div className="card" style={{ padding: '16px', textAlign: 'center', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
-              <span style={{ fontSize: '0.72rem', color: '#10b981' }}>Alta Rotación</span>
+            <div
+              className="card"
+              onClick={() => setAnalysisClassFilter(analysisClassFilter === 'alta' ? 'all' : 'alta')}
+              style={{
+                padding: '16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                borderColor: analysisClassFilter === 'alta' ? '#10b981' : 'rgba(16, 185, 129, 0.3)',
+                background: analysisClassFilter === 'alta' ? 'rgba(16, 185, 129, 0.15)' : undefined,
+                boxShadow: analysisClassFilter === 'alta' ? '0 0 0 1px #10b981' : 'none'
+              }}
+              title="Click para filtrar por Alta Rotación"
+            >
+              <span style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 600 }}>Alta Rotación</span>
               <p style={{ fontSize: '1.4rem', fontWeight: 900, color: '#10b981', marginTop: '4px' }}>
                 {analysisData.rotation_summary?.alta || 0} productos
               </p>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                {analysisClassFilter === 'alta' ? '● Filtro activo' : 'Click para filtrar'}
+              </span>
             </div>
 
-            <div className="card" style={{ padding: '16px', textAlign: 'center', borderColor: 'rgba(59, 130, 246, 0.3)' }}>
-              <span style={{ fontSize: '0.72rem', color: '#3b82f6' }}>Media Rotación</span>
+            <div
+              className="card"
+              onClick={() => setAnalysisClassFilter(analysisClassFilter === 'media' ? 'all' : 'media')}
+              style={{
+                padding: '16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                borderColor: analysisClassFilter === 'media' ? '#3b82f6' : 'rgba(59, 130, 246, 0.3)',
+                background: analysisClassFilter === 'media' ? 'rgba(59, 130, 246, 0.15)' : undefined,
+                boxShadow: analysisClassFilter === 'media' ? '0 0 0 1px #3b82f6' : 'none'
+              }}
+              title="Click para filtrar por Media Rotación"
+            >
+              <span style={{ fontSize: '0.72rem', color: '#3b82f6', fontWeight: 600 }}>Media Rotación</span>
               <p style={{ fontSize: '1.4rem', fontWeight: 900, color: '#3b82f6', marginTop: '4px' }}>
                 {analysisData.rotation_summary?.media || 0} productos
               </p>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                {analysisClassFilter === 'media' ? '● Filtro activo' : 'Click para filtrar'}
+              </span>
             </div>
 
-            <div className="card" style={{ padding: '16px', textAlign: 'center', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
-              <span style={{ fontSize: '0.72rem', color: '#ef4444' }}>Sin Movimiento (+{noMovementDays}d)</span>
+            <div
+              className="card"
+              onClick={() => setAnalysisClassFilter(analysisClassFilter === 'sin_movimiento' ? 'all' : 'sin_movimiento')}
+              style={{
+                padding: '16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                borderColor: analysisClassFilter === 'sin_movimiento' ? '#ef4444' : 'rgba(239, 68, 68, 0.3)',
+                background: analysisClassFilter === 'sin_movimiento' ? 'rgba(239, 68, 68, 0.15)' : undefined,
+                boxShadow: analysisClassFilter === 'sin_movimiento' ? '0 0 0 1px #ef4444' : 'none'
+              }}
+              title="Click para filtrar por Sin Movimiento"
+            >
+              <span style={{ fontSize: '0.72rem', color: '#ef4444', fontWeight: 600 }}>Sin Movimiento (+{noMovementDays}d)</span>
               <p style={{ fontSize: '1.4rem', fontWeight: 900, color: '#ef4444', marginTop: '4px' }}>
                 {analysisData.rotation_summary?.sin_movimiento || 0} productos
               </p>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                {analysisClassFilter === 'sin_movimiento' ? '● Filtro activo' : 'Click para filtrar'}
+              </span>
+            </div>
+          </div>
+
+          {/* Quick Filter Chips Bar */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginRight: '4px' }}>Filtrar por:</span>
+              <button
+                onClick={() => setAnalysisClassFilter('all')}
+                className={`btn btn-sm ${analysisClassFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '4px 10px', fontSize: '0.75rem', borderRadius: '20px' }}
+              >
+                Todos ({analysisData.products?.length || 0})
+              </button>
+              <button
+                onClick={() => setAnalysisClassFilter('alta')}
+                className={`btn btn-sm ${analysisClassFilter === 'alta' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '0.75rem',
+                  borderRadius: '20px',
+                  borderColor: analysisClassFilter === 'alta' ? '#10b981' : undefined,
+                  background: analysisClassFilter === 'alta' ? '#10b981' : undefined,
+                  color: analysisClassFilter === 'alta' ? '#fff' : '#10b981'
+                }}
+              >
+                Alta Rotación ({analysisData.rotation_summary?.alta || 0})
+              </button>
+              <button
+                onClick={() => setAnalysisClassFilter('media')}
+                className={`btn btn-sm ${analysisClassFilter === 'media' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '0.75rem',
+                  borderRadius: '20px',
+                  borderColor: analysisClassFilter === 'media' ? '#3b82f6' : undefined,
+                  background: analysisClassFilter === 'media' ? '#3b82f6' : undefined,
+                  color: analysisClassFilter === 'media' ? '#fff' : '#3b82f6'
+                }}
+              >
+                Media Rotación ({analysisData.rotation_summary?.media || 0})
+              </button>
+              <button
+                onClick={() => setAnalysisClassFilter('sin_movimiento')}
+                className={`btn btn-sm ${analysisClassFilter === 'sin_movimiento' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '0.75rem',
+                  borderRadius: '20px',
+                  borderColor: analysisClassFilter === 'sin_movimiento' ? '#ef4444' : undefined,
+                  background: analysisClassFilter === 'sin_movimiento' ? '#ef4444' : undefined,
+                  color: analysisClassFilter === 'sin_movimiento' ? '#fff' : '#ef4444'
+                }}
+              >
+                Sin Movimiento ({analysisData.rotation_summary?.sin_movimiento || 0})
+              </button>
+            </div>
+
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Página <strong style={{ color: 'var(--text-primary)' }}>{analysisPage}</strong> de <strong style={{ color: 'var(--text-primary)' }}>{totalAnalysisPages}</strong>
             </div>
           </div>
 
@@ -557,41 +805,160 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                 </tr>
               </thead>
               <tbody>
-                {analysisData.products?.map(p => {
-                  const isDead = p.rotation_class === 'sin_movimiento';
-                  const isHigh = p.rotation_class === 'alta';
-                  const isMedium = p.rotation_class === 'media';
+                {paginatedAnalysisProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                      No se encontraron productos con los filtros seleccionados.
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedAnalysisProducts.map(p => {
+                    const isDead = p.rotation_class === 'sin_movimiento';
+                    const isHigh = p.rotation_class === 'alta';
+                    const isMedium = p.rotation_class === 'media';
 
-                  const badgeBg = isHigh ? 'rgba(16, 185, 129, 0.15)' : isMedium ? 'rgba(59, 130, 246, 0.15)' : 'rgba(239, 68, 68, 0.15)';
-                  const badgeColor = isHigh ? 'var(--success)' : isMedium ? '#3b82f6' : 'var(--danger)';
-                  const label = isHigh ? 'Alta Rotación' : isMedium ? 'Media Rotación' : 'Sin Movimiento';
+                    const badgeBg = isHigh ? 'rgba(16, 185, 129, 0.15)' : isMedium ? 'rgba(59, 130, 246, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+                    const badgeColor = isHigh ? 'var(--success)' : isMedium ? '#3b82f6' : 'var(--danger)';
+                    const label = isHigh ? 'Alta Rotación' : isMedium ? 'Media Rotación' : 'Sin Movimiento';
 
-                  return (
-                    <tr key={p.id}>
-                      <td>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{p.name}</div>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{p.sku}</span>
-                      </td>
-                      <td>{p.brand_name || p.line || '-'}</td>
-                      <td style={{ fontWeight: 700 }}>{p.current_stock} und.</td>
-                      <td style={{ fontWeight: 700, color: '#38bdf8' }}>{p.units_sold_30d || 0} und.</td>
-                      <td style={{ color: (p.days_since_last_sale ?? 999) > 60 ? 'var(--danger)' : 'inherit' }}>
-                        {p.days_since_last_sale === null || p.days_since_last_sale === undefined ? 'Sin ventas' : `${p.days_since_last_sale} días`}
-                      </td>
-                      <td style={{ fontWeight: 800, color: 'var(--text-primary)' }}>
-                        RD$ {(Number(p.cost) * Number(p.current_stock)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td>
-                        <span className="badge" style={{ background: badgeBg, color: badgeColor, border: `1px solid ${badgeColor}40` }}>
-                          {label}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    return (
+                      <tr key={p.id}>
+                        <td>
+                          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{p.name}</div>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{p.sku}</span>
+                        </td>
+                        <td>{p.brand_name || p.line || '-'}</td>
+                        <td style={{ fontWeight: 700 }}>{p.current_stock} und.</td>
+                        <td style={{ fontWeight: 700, color: '#38bdf8' }}>{p.units_sold_30d || 0} und.</td>
+                        <td style={{ color: (p.days_since_last_sale ?? 999) > 60 ? 'var(--danger)' : 'inherit' }}>
+                          {p.days_since_last_sale === null || p.days_since_last_sale === undefined ? 'Sin ventas' : `${p.days_since_last_sale} días`}
+                        </td>
+                        <td style={{ fontWeight: 800, color: 'var(--text-primary)' }}>
+                          RD$ {(Number(p.cost) * Number(p.current_stock)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td>
+                          <span className="badge" style={{ background: badgeBg, color: badgeColor, border: `1px solid ${badgeColor}40` }}>
+                            {label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls Footer */}
+          {filteredAnalysisProducts.length > 0 && (
+            <div
+              className="card"
+              style={{
+                padding: '12px 18px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px',
+                marginTop: '4px'
+              }}
+            >
+              {/* Left: Rows Per Page Selector */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Mostrar</span>
+                <select
+                  className="select-control"
+                  value={analysisPageSize}
+                  onChange={(e) => {
+                    setAnalysisPageSize(Number(e.target.value));
+                    setAnalysisPage(1);
+                  }}
+                  style={{ width: '80px', height: '32px', fontSize: '0.8rem', padding: '0 8px' }}
+                >
+                  <option value={10}>10</option>
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>por página</span>
+              </div>
+
+              {/* Center: Showing X to Y of Z */}
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                Mostrando <strong style={{ color: 'var(--text-primary)' }}>{(analysisPage - 1) * analysisPageSize + 1}</strong> - <strong style={{ color: 'var(--text-primary)' }}>{Math.min(analysisPage * analysisPageSize, filteredAnalysisProducts.length)}</strong> de <strong style={{ color: 'var(--text-primary)' }}>{filteredAnalysisProducts.length}</strong> productos
+                {analysisClassFilter !== 'all' && (
+                  <span style={{ marginLeft: '6px', color: 'var(--text-muted)' }}>
+                    (filtrado por {analysisClassFilter === 'alta' ? 'Alta Rotación' : analysisClassFilter === 'media' ? 'Media Rotación' : 'Sin Movimiento'})
+                  </span>
+                )}
+              </div>
+
+              {/* Right: Page Navigation */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button
+                  onClick={() => setAnalysisPage(1)}
+                  disabled={analysisPage <= 1}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Primera página"
+                >
+                  <ChevronsLeft size={14} />
+                </button>
+
+                <button
+                  onClick={() => setAnalysisPage(p => Math.max(1, p - 1))}
+                  disabled={analysisPage <= 1}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Página anterior"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+
+                {analysisPageNumbers.map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setAnalysisPage(p)}
+                    style={{
+                      minWidth: '32px',
+                      height: '32px',
+                      borderRadius: '6px',
+                      border: p === analysisPage ? '1px solid #3b82f6' : '1px solid var(--border-color)',
+                      background: p === analysisPage ? '#3b82f6' : 'var(--bg-subtle)',
+                      color: p === analysisPage ? '#ffffff' : 'var(--text-primary)',
+                      fontWeight: p === analysisPage ? 700 : 500,
+                      fontSize: '0.82rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
+
+                <button
+                  onClick={() => setAnalysisPage(p => Math.min(totalAnalysisPages, p + 1))}
+                  disabled={analysisPage >= totalAnalysisPages}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Página siguiente"
+                >
+                  <ChevronRight size={14} />
+                </button>
+
+                <button
+                  onClick={() => setAnalysisPage(totalAnalysisPages)}
+                  disabled={analysisPage >= totalAnalysisPages}
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '6px 8px', height: '32px' }}
+                  title="Última página"
+                >
+                  <ChevronsRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -682,7 +1049,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                 </select>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '10px' }}>
                 <div>
                   <label className="label-control">Tipo de Ajuste</label>
                   <select
@@ -690,15 +1057,21 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                     value={adjustData.adjustment_type}
                     onChange={(e) => setAdjustData({ ...adjustData, adjustment_type: e.target.value })}
                   >
-                    <option value="in">Entrada (+)</option>
-                    <option value="out">Salida (-)</option>
+                    <option value="in">Entrada por Ajuste (+)</option>
+                    <option value="out">Salida por Ajuste / Merma (-)</option>
+                    <option value="physical_count">Conteo Físico (Inventario Real)</option>
+                    <option value="purchase_return">Devolución a Proveedor (-)</option>
+                    <option value="initial">Inventario Inicial (+)</option>
                   </select>
                 </div>
                 <div>
-                  <label className="label-control">Cantidad</label>
+                  <label className="label-control">
+                    {adjustData.adjustment_type === 'physical_count' ? 'Conteo Físico Real' : 'Cantidad'}
+                  </label>
                   <input
                     type="number"
-                    min="1"
+                    min="0"
+                    step="any"
                     required
                     className="input-control"
                     value={adjustData.quantity}
@@ -706,6 +1079,19 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                   />
                 </div>
               </div>
+
+              {adjustData.adjustment_type === 'physical_count' && (
+                <div style={{
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  background: 'rgba(56, 189, 248, 0.1)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  fontSize: '0.78rem',
+                  color: '#38bdf8'
+                }}>
+                  ℹ️ <strong>Conteo Físico:</strong> Ingrese el stock real contado en anaquel. El sistema calculará automáticamente la diferencia con respecto a las existencias actuales registradas y creará el movimiento correspondiente.
+                </div>
+              )}
 
               <div>
                 <label className="label-control">Motivo del Ajuste</label>
@@ -769,37 +1155,76 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                 </div>
               </div>
 
-              <div>
-                <label className="label-control">Producto a Transferir *</label>
-                <select
-                  required
-                  className="select-control"
-                  value={transferData.items[0].product_id}
-                  onChange={(e) => setTransferData({
-                    ...transferData,
-                    items: [{ ...transferData.items[0], product_id: e.target.value }]
-                  })}
-                >
-                  <option value="">Seleccionar Producto...</option>
-                  {products.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
-                  ))}
-                </select>
-              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <label className="label-control" style={{ marginBottom: 0 }}>Productos a Transferir *</label>
+                  <button
+                    type="button"
+                    onClick={handleAddTransferItem}
+                    className="btn btn-sm btn-secondary"
+                    style={{ padding: '3px 8px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Plus size={13} />
+                    <span>Agregar Producto</span>
+                  </button>
+                </div>
 
-              <div>
-                <label className="label-control">Cantidad *</label>
-                <input
-                  type="number"
-                  min="1"
-                  required
-                  className="input-control"
-                  value={transferData.items[0].quantity}
-                  onChange={(e) => setTransferData({
-                    ...transferData,
-                    items: [{ ...transferData.items[0], quantity: e.target.value }]
-                  })}
-                />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {transferData.items.map((item, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 90px 32px',
+                        gap: '8px',
+                        alignItems: 'center',
+                        background: 'var(--bg-card)',
+                        padding: '6px 8px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border-color)'
+                      }}
+                    >
+                      <select
+                        required
+                        className="select-control"
+                        style={{ height: '34px', fontSize: '0.78rem' }}
+                        value={item.product_id}
+                        onChange={(e) => handleTransferItemChange(idx, 'product_id', e.target.value)}
+                      >
+                        <option value="">Seleccionar Producto...</option>
+                        {products.map(p => (
+                          <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                        ))}
+                      </select>
+
+                      <input
+                        type="number"
+                        min="1"
+                        step="any"
+                        required
+                        placeholder="Cant."
+                        className="input-control"
+                        style={{ height: '34px', fontSize: '0.78rem' }}
+                        value={item.quantity}
+                        onChange={(e) => handleTransferItemChange(idx, 'quantity', e.target.value)}
+                      />
+
+                      {transferData.items.length > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTransferItem(idx)}
+                          className="btn btn-sm btn-danger"
+                          style={{ padding: '6px', height: '34px', width: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          title="Eliminar producto"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      ) : (
+                        <div style={{ width: '32px' }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div>

@@ -3,21 +3,23 @@ const router = express.Router();
 const financeController = require('./financeController');
 const { authenticateToken } = require('../../middlewares/auth');
 const { requirePermission } = require('../../middlewares/rbac');
+const { idempotencyMiddleware } = require('../../middlewares/idempotency');
 
 router.use(authenticateToken);
 
 // Accounts Receivable (CxC)
 router.get('/receivables', requirePermission('cxc.view'), financeController.getReceivables);
 router.get('/receivables/aging-table', requirePermission('cxc.view'), financeController.getCxCAgingTable);
-router.post('/receivables/pay', requirePermission('cxc.pay'), financeController.receivePayment);
+router.post('/receivables/pay', requirePermission('cxc.pay'), idempotencyMiddleware(), financeController.receivePayment);
 
 // Accounts Payable (CxP)
 router.get('/payables', requirePermission('cxp.view'), financeController.getPayables);
-router.post('/payables/pay', requirePermission('cxp.pay'), financeController.paySupplier);
+router.post('/payables/pay', requirePermission('cxp.pay'), idempotencyMiddleware(), financeController.paySupplier);
 
 // Expenses
 router.get('/expenses', requirePermission('expenses.view'), financeController.getExpenses);
 router.post('/expenses', requirePermission('expenses.create'), financeController.createExpense);
+router.delete('/expenses/:id', requirePermission('expenses.delete'), financeController.deleteExpense);
 router.get('/expense-categories', financeController.getExpenseCategories);
 
 // Recurring Expenses (Pagos Fijos)

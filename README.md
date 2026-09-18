@@ -9,7 +9,7 @@ Plataforma empresarial de gestión comercial, inventario, punto de venta (POS) y
 - **Backend**: Node.js, Express REST API v1, SQLite con WAL mode y Foreign Keys habilitadas (altamente transaccional con ACID garantizado), BCrypt, JWT.
 - **Frontend**: React 19, Vite, Lucide Icons, diseño empresarial Slate & Sapphire con micro-animaciones y soporte para impresión térmica de 80mm.
 - **Base de Datos**: Esquema relacional con más de 35 tablas, índices optimizados y tipos monetarios decimales.
-- **Despliegue**: Docker, Dockerfile y Docker Compose con volúmenes persistentes.
+- **Despliegue**: Directo en servidor con PostgreSQL y PM2 mediante `deploy.sh`.
 
 ---
 
@@ -52,17 +52,6 @@ Abre en tu navegador: [http://localhost:3000](http://localhost:3000)
 cd backend
 node tests/integration.test.js
 ```
-
----
-
-## 🐳 Despliegue con Docker
-
-Para construir y levantar el sistema completo en contenedores:
-```bash
-docker-compose up --build -d
-```
-- Frontend accesible en: `http://localhost`
-- Backend API accesible en: `http://localhost:5000`
 
 ---
 

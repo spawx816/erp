@@ -10,15 +10,18 @@ router.use(authenticateToken);
 router.get('/products', catalogController.getProducts);
 router.get('/products/barcode/:barcode', catalogController.lookupBarcode);
 router.get('/products/:id', catalogController.getProductById);
-router.get('/dyes/matrix', catalogController.getDyeMatrix);
 router.post('/products', requirePermission('inventory.adjust'), catalogController.createProduct);
 router.put('/products/:id', requirePermission('inventory.adjust'), catalogController.updateProduct);
 
 // Classifications
 router.get('/categories', catalogController.getCategories);
 router.post('/categories', catalogController.createCategory);
+router.put('/categories/:id', catalogController.updateCategory);
+router.delete('/categories/:id', catalogController.deleteCategory);
 router.get('/brands', catalogController.getBrands);
 router.post('/brands', catalogController.createBrand);
+router.put('/brands/:id', catalogController.updateBrand);
+router.delete('/brands/:id', catalogController.deleteBrand);
 router.get('/units', catalogController.getUnits);
 router.get('/price-lists', catalogController.getPriceLists);
 

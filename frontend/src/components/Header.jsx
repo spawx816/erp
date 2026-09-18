@@ -404,24 +404,33 @@ export default function Header({
         </button>
 
         {/* Cash Register Indicator */}
-        <div
-          onClick={onOpenCashModal}
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof onOpenCashModal === 'function') {
+              onOpenCashModal();
+            } else if (typeof onNavigate === 'function') {
+              onNavigate('cash-register');
+            }
+          }}
+          title={activeSession ? 'Turno de Caja Abierto - Clic para ver arqueo y cuadres' : 'Caja Cerrada - Clic para aperturar turno de caja'}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
-            background: activeSession ? 'var(--success-bg)' : 'var(--danger-bg)',
-            border: `1px solid ${activeSession ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+            background: activeSession ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+            border: `1px solid ${activeSession ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
             padding: '6px 12px',
             borderRadius: '8px',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            transition: 'all 0.15s ease'
           }}
         >
           <Wallet size={15} color={activeSession ? 'var(--success)' : 'var(--danger)'} />
           <span style={{ fontSize: '0.76rem', fontWeight: 700, color: activeSession ? 'var(--success)' : 'var(--danger)' }}>
             {activeSession ? 'Caja Abierta' : 'Caja Cerrada'}
           </span>
-        </div>
+        </button>
 
         {/* Notifications Center Bell (Section 31) */}
         <div ref={notifRef} style={{ position: 'relative' }}>

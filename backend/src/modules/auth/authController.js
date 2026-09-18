@@ -16,7 +16,7 @@ const authController = {
         SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email,
                u.password_hash, u.max_discount_percentage, u.status, u.token_version,
                COALESCE(r.name, 'Super Administrador') as role_name, COALESCE(r.slug, 'admin') as role_slug,
-               COALESCE(c.name, 'Nexus Distribuciones SRL') as company_name, COALESCE(c.currency, 'DOP') as currency, COALESCE(c.currency_symbol, 'RD$') as currency_symbol, COALESCE(c.tax_id, '131-99887-1') as company_tax_id, c.allow_negative_inventory
+               COALESCE(c.name, 'Nexus Distribuciones SRL') as company_name, COALESCE(c.currency, 'DOP') as currency, COALESCE(c.currency_symbol, 'RD$') as currency_symbol, COALESCE(c.tax_id, '131-99887-1') as company_tax_id, c.allow_negative_inventory, c.cash_requires_open_session
         FROM users u
         LEFT JOIN roles r ON u.role_id = r.id
         LEFT JOIN companies c ON u.company_id = c.id
@@ -39,7 +39,7 @@ const authController = {
               SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email,
                      u.password_hash, u.max_discount_percentage, u.status, u.token_version,
                      COALESCE(r.name, 'Super Administrador') as role_name, COALESCE(r.slug, 'admin') as role_slug,
-                     COALESCE(c.name, 'Nexus Distribuciones SRL') as company_name, COALESCE(c.currency, 'DOP') as currency, COALESCE(c.currency_symbol, 'RD$') as currency_symbol, COALESCE(c.tax_id, '131-99887-1') as company_tax_id, c.allow_negative_inventory
+                     COALESCE(c.name, 'Nexus Distribuciones SRL') as company_name, COALESCE(c.currency, 'DOP') as currency, COALESCE(c.currency_symbol, 'RD$') as currency_symbol, COALESCE(c.tax_id, '131-99887-1') as company_tax_id, c.allow_negative_inventory, c.cash_requires_open_session
               FROM users u
               LEFT JOIN roles r ON u.role_id = r.id
               LEFT JOIN companies c ON u.company_id = c.id
@@ -110,7 +110,7 @@ const authController = {
       logAudit({
         companyId: user.company_id,
         userId: user.id,
-        ipAddress: req.ip || req.connection.remoteAddress,
+        ipAddress: req.ip || req.socket?.remoteAddress,
         module: 'auth',
         action: 'login',
         recordId: user.id,
@@ -189,7 +189,7 @@ const authController = {
         logAudit({
           companyId: req.user.company_id,
           userId: req.user.id,
-          ipAddress: req.ip || req.connection.remoteAddress,
+          ipAddress: req.ip || req.socket?.remoteAddress,
           module: 'auth',
           action: 'logout',
           recordId: req.user.id,
@@ -199,6 +199,86 @@ const authController = {
       return res.json({ success: true, message: 'Sesión finalizada correctamente.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  refresh: async (req, res) => {
+    try {
+      // Support direct user object (e.g. from middleware or unit test)
+      if (req.user !== undefined) {
+        if (!req.user || req.user.status !== 'active') {
+          return res.status(401).json({ success: false, message: 'Usuario no encontrado o inactivo.' });
+        }
+        const userTokenVer = req.user.token_version !== undefined && req.user.token_version !== null ? Number(req.user.token_version) : 1;
+        const newToken = jwt.sign(
+          { userId: req.user.id, companyId: req.user.company_id, roleId: req.user.role_id, tokenVersion: userTokenVer },
+          JWT_SECRET,
+          { expiresIn: '12h' }
+        );
+        return res.json({
+          success: true,
+          token: newToken,
+          user: req.user
+        });
+      }
+
+      const authHeader = req.headers ? req.headers['authorization'] : null;
+      const rawToken = (authHeader && authHeader.split(' ')[1]) || req.body?.token;
+
+      if (!rawToken) {
+        return res.status(401).json({ success: false, message: 'Token no proporcionado para renovación.' });
+      }
+
+      let decoded;
+      try {
+        decoded = jwt.verify(rawToken, JWT_SECRET, { ignoreExpiration: true });
+      } catch (jwtErr) {
+        return res.status(401).json({ success: false, message: 'Firma de token inválida.' });
+      }
+
+      // Allow refreshing if token is valid or expired within 7 days grace period
+      if (decoded.exp) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const maxGracePeriodSec = 7 * 24 * 3600; // 7 days
+        if (nowSec - decoded.exp > maxGracePeriodSec) {
+          return res.status(401).json({ success: false, message: 'La sesión expiró hace más de 7 días. Inicie sesión nuevamente.' });
+        }
+      }
+
+      const user = await db.prepare(`
+        SELECT u.id, u.company_id, u.branch_id, u.role_id, u.username, u.first_name, u.last_name, u.email, u.max_discount_percentage, u.status, u.token_version,
+               r.name as role_name, r.slug as role_slug,
+               c.name as company_name, c.currency, c.currency_symbol, c.allow_negative_inventory, c.cash_requires_open_session
+        FROM users u
+        JOIN roles r ON u.role_id = r.id
+        JOIN companies c ON u.company_id = c.id
+        WHERE u.id = ? AND u.status = 'active'
+      `).get(decoded.userId);
+
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Usuario no encontrado o inactivo.' });
+      }
+
+      const userTokenVer = user.token_version !== undefined && user.token_version !== null ? Number(user.token_version) : 1;
+      const decodedTokenVer = decoded.tokenVersion !== undefined && decoded.tokenVersion !== null ? Number(decoded.tokenVersion) : 1;
+
+      if (decodedTokenVer !== userTokenVer) {
+        return res.status(401).json({ success: false, message: 'La sesión fue revocada o cerrada en otro dispositivo. Inicie sesión nuevamente.' });
+      }
+
+      const newToken = jwt.sign(
+        { userId: user.id, companyId: user.company_id, roleId: user.role_id, tokenVersion: userTokenVer },
+        JWT_SECRET,
+        { expiresIn: '12h' }
+      );
+
+      return res.json({
+        success: true,
+        token: newToken,
+        user
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error renovando token.', error: err.message });
     }
   }
 };

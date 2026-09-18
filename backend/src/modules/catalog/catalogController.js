@@ -186,6 +186,15 @@ const catalogController = {
         return res.status(400).json({ success: false, message: `Ya existe un producto con el SKU: ${sku}` });
       }
 
+      const numCost = cost === '' || cost === null || cost === undefined ? 0 : Number(cost);
+      const numPrice = price === '' || price === null || price === undefined ? 0 : Number(price);
+      const numMinPrice = min_price === '' || min_price === null || min_price === undefined ? numPrice : Number(min_price);
+      const numTaxRate = tax_rate === '' || tax_rate === null || tax_rate === undefined ? 18.00 : Number(tax_rate);
+      const numStockMin = stock_min === '' || stock_min === null || stock_min === undefined ? 0 : Number(stock_min);
+      const numStockMax = stock_max === '' || stock_max === null || stock_max === undefined ? 0 : Number(stock_max);
+      const numMaxDiscount = max_discount_percent === '' || max_discount_percent === null || max_discount_percent === undefined ? 0 : Number(max_discount_percent);
+      const numInitialStock = initial_stock === '' || initial_stock === null || initial_stock === undefined ? 0 : Number(initial_stock);
+
       const newProduct = await runTransaction(async (txDb) => {
         const stmt = txDb.prepare(`
           INSERT INTO products (
@@ -196,10 +205,10 @@ const catalogController = {
         `);
 
         const resInsert = await stmt.run(
-          companyId, category_id || null, brand_id || null, unit_id || null,
+          companyId, category_id ? Number(category_id) : null, brand_id ? Number(brand_id) : null, unit_id ? Number(unit_id) : null,
           internal_code || null, sku, barcode || null, name, description || null,
-          type, cost, price, min_price, tax_rate,
-          stock_min, stock_max, allows_discount ? 1 : 0, max_discount_percent
+          type, numCost, numPrice, numMinPrice, numTaxRate,
+          numStockMin, numStockMax, allows_discount ? 1 : 0, numMaxDiscount
         );
 
         const productId = resInsert.lastInsertRowid;
@@ -211,18 +220,20 @@ const catalogController = {
             VALUES (?, ?, ?, ?, ?, ?)
           `);
           for (const v of variants) {
-            await stmtVar.run(productId, v.variant_name, v.sku, v.barcode || null, v.cost || cost, v.price || price);
+            const vCost = v.cost === '' || v.cost === null || v.cost === undefined ? numCost : Number(v.cost);
+            const vPrice = v.price === '' || v.price === null || v.price === undefined ? numPrice : Number(v.price);
+            await stmtVar.run(productId, v.variant_name, v.sku, v.barcode || null, vCost, vPrice);
           }
         }
 
         // If initial stock provided
-        if (type === 'physical' && initial_warehouse_id && Number(initial_stock) > 0) {
+        if (type === 'physical' && initial_warehouse_id && Number(initial_warehouse_id) > 0 && numInitialStock > 0) {
           const warehouse = await txDb.prepare('SELECT branch_id FROM warehouses WHERE id = ? AND company_id = ?').get(initial_warehouse_id, companyId);
           if (warehouse) {
             await txDb.prepare(`
               INSERT INTO inventories (company_id, branch_id, warehouse_id, product_id, quantity)
               VALUES (?, ?, ?, ?, ?)
-            `).run(companyId, warehouse.branch_id, initial_warehouse_id, productId, initial_stock);
+            `).run(companyId, warehouse.branch_id, initial_warehouse_id, productId, numInitialStock);
 
             await txDb.prepare(`
               INSERT INTO inventory_movements (
@@ -231,7 +242,7 @@ const catalogController = {
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
               companyId, warehouse.branch_id, initial_warehouse_id, productId, req.user.id,
-              'initial', 0, initial_stock, initial_stock, cost, cost * initial_stock, 'initial', 'Inventario inicial de creación de producto'
+              'initial', 0, numInitialStock, numInitialStock, numCost, Math.round(numCost * numInitialStock * 100) / 100, 'initial', 'Inventario inicial de creación de producto'
             );
           }
         }
@@ -271,6 +282,14 @@ const catalogController = {
         return res.status(404).json({ success: false, message: 'Producto no encontrado.' });
       }
 
+      const numCost = cost === undefined ? null : (cost === '' || cost === null ? 0 : Number(cost));
+      const numPrice = price === undefined ? null : (price === '' || price === null ? 0 : Number(price));
+      const numMinPrice = min_price === undefined ? null : (min_price === '' || min_price === null ? 0 : Number(min_price));
+      const numTaxRate = tax_rate === undefined ? null : (tax_rate === '' || tax_rate === null ? 18.00 : Number(tax_rate));
+      const numStockMin = stock_min === undefined ? null : (stock_min === '' || stock_min === null ? 0 : Number(stock_min));
+      const numStockMax = stock_max === undefined ? null : (stock_max === '' || stock_max === null ? 0 : Number(stock_max));
+      const numMaxDiscount = max_discount_percent === undefined ? null : (max_discount_percent === '' || max_discount_percent === null ? 0 : Number(max_discount_percent));
+
       await db.prepare(`
         UPDATE products SET
           name = COALESCE(?, name),
@@ -293,9 +312,9 @@ const catalogController = {
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND company_id = ?
       `).run(
-        name, barcode, internal_code, category_id, brand_id, unit_id,
-        description, type, cost, price, min_price, tax_rate,
-        stock_min, stock_max, allows_discount !== undefined ? (allows_discount ? 1 : 0) : null, max_discount_percent, status,
+        name, barcode, internal_code, category_id ? Number(category_id) : null, brand_id ? Number(brand_id) : null, unit_id ? Number(unit_id) : null,
+        description, type, numCost, numPrice, numMinPrice, numTaxRate,
+        numStockMin, numStockMax, allows_discount !== undefined ? (allows_discount ? 1 : 0) : null, numMaxDiscount, status,
         id, companyId
       );
 
@@ -333,7 +352,32 @@ const catalogController = {
       if (!name) return res.status(400).json({ success: false, message: 'Nombre requerido.' });
       const stmt = await db.prepare('INSERT INTO categories (company_id, name, description) VALUES (?, ?, ?)');
       const result = await stmt.run(req.user.company_id, name, description || null);
-      return res.json({ success: true, data: { id: result.lastInsertRowid, name } });
+      return res.json({ success: true, data: { id: result.lastInsertRowid, name, description: description || null } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  updateCategory: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, description } = req.body;
+      if (!name) return res.status(400).json({ success: false, message: 'Nombre requerido.' });
+      await db.prepare('UPDATE categories SET name = ?, description = ? WHERE id = ? AND company_id = ?')
+        .run(name, description || null, id, req.user.company_id);
+      return res.json({ success: true, message: 'Categoria actualizada.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  deleteCategory: async (req, res) => {
+    try {
+      const { id } = req.params;
+      // Unlink products first
+      await db.prepare('UPDATE products SET category_id = NULL WHERE category_id = ? AND company_id = ?').run(id, req.user.company_id);
+      await db.prepare('DELETE FROM categories WHERE id = ? AND company_id = ?').run(id, req.user.company_id);
+      return res.json({ success: true, message: 'Categoria eliminada.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -361,6 +405,28 @@ const catalogController = {
     }
   },
 
+  updateBrand: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name } = req.body;
+      if (!name) return res.status(400).json({ success: false, message: 'Nombre requerido.' });
+      await db.prepare('UPDATE brands SET name = ? WHERE id = ? AND company_id = ?').run(name, id, req.user.company_id);
+      return res.json({ success: true, message: 'Marca actualizada.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  deleteBrand: async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.prepare('DELETE FROM brands WHERE id = ? AND company_id = ?').run(id, req.user.company_id);
+      return res.json({ success: true, message: 'Marca eliminada.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   // UNITS
   getUnits: async (req, res) => {
     try {
@@ -376,76 +442,6 @@ const catalogController = {
     try {
       const lists = await db.prepare('SELECT * FROM price_lists WHERE company_id = ? ORDER BY id ASC').all(req.user.company_id);
       return res.json({ success: true, data: lists });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  },
-
-  // DYE MATRIX (Matriz de tonos por numeración con semáforos)
-  getDyeMatrix: async (req, res) => {
-    try {
-      const companyId = req.user.company_id;
-      const { line, brand_id, warehouse_id, branch_id } = req.query;
-
-      let where = ['p.company_id = ?', '(p.is_dye = 1 OR p.shade_number IS NOT NULL)'];
-      let params = [companyId];
-
-      if (line) {
-        where.push('p.line = ?');
-        params.push(line);
-      }
-      if (brand_id) {
-        where.push('p.brand_id = ?');
-        params.push(brand_id);
-      }
-
-      const parsedWhId = warehouse_id ? parseInt(warehouse_id, 10) : null;
-      const parsedBrId = branch_id ? parseInt(branch_id, 10) : null;
-
-      const stockSubquery = parsedWhId
-        ? `(SELECT COALESCE(SUM(inv.quantity), 0) FROM inventories inv WHERE inv.product_id = p.id AND inv.warehouse_id = ${parsedWhId})`
-        : parsedBrId
-        ? `(SELECT COALESCE(SUM(inv.quantity), 0) FROM inventories inv WHERE inv.product_id = p.id AND inv.branch_id = ${parsedBrId})`
-        : `(SELECT COALESCE(SUM(inv.quantity), 0) FROM inventories inv WHERE inv.product_id = p.id)`;
-
-      const dyes = await db.prepare(`
-        SELECT p.id, p.name, p.shade_number, p.line, p.family, p.color_hex, p.price, p.cost, p.sku, p.barcode,
-               b.name as brand_name,
-               ${stockSubquery} as current_stock,
-               p.stock_min
-        FROM products p
-        LEFT JOIN brands b ON p.brand_id = b.id
-        WHERE ${where.join(' AND ')}
-        ORDER BY p.shade_number ASC
-      `).all(...params);
-
-      const formatted = dyes.map(d => {
-        const stock = parseFloat(d.current_stock || 0);
-        let stockStatus = 'available'; // green
-        if (stock <= 0) stockStatus = 'out_of_stock'; // red
-        else if (stock <= d.stock_min) stockStatus = 'low_stock'; // yellow
-        return {
-          ...d,
-          stock,
-          stock_status: stockStatus
-        };
-      });
-
-      const families = {};
-      formatted.forEach(d => {
-        const fam = d.family || 'Otros';
-        if (!families[fam]) families[fam] = [];
-        families[fam].push(d);
-      });
-
-      return res.json({
-        success: true,
-        data: {
-          total_shades: formatted.length,
-          shades: formatted,
-          grouped_by_family: families
-        }
-      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }

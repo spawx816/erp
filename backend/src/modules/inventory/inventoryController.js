@@ -79,7 +79,7 @@ const inventoryController = {
         whereClauses.push('m.warehouse_id = ?');
         params.push(warehouse_id);
       }
-      if (movement_type) {
+      if (movement_type && movement_type !== 'all') {
         whereClauses.push('m.movement_type = ?');
         params.push(movement_type);
       }
@@ -149,8 +149,42 @@ const inventoryController = {
         return res.status(404).json({ success: false, message: 'Almacén no encontrado.' });
       }
 
-      const qty = Math.abs(Number(quantity)) * (adjustment_type === 'out' ? -1 : 1);
-      const movType = adjustment_type === 'out' ? 'adjustment_out' : 'adjustment_in';
+      const currentPhysicalStock = await InventoryService.getPhysicalStock(warehouse_id, product_id, variant_id || null);
+
+      let movType = 'adjustment_in';
+      let qty = Math.abs(Number(quantity));
+
+      if (adjustment_type === 'out' || adjustment_type === 'adjustment_out') {
+        movType = 'adjustment_out';
+        qty = -qty;
+      } else if (adjustment_type === 'in' || adjustment_type === 'adjustment_in') {
+        movType = 'adjustment_in';
+        qty = Math.abs(qty);
+      } else if (adjustment_type === 'physical_count') {
+        movType = 'physical_count';
+        // quantity is the counted physical stock. Delta = counted - currentPhysicalStock
+        const counted = Number(quantity);
+        const delta = counted - currentPhysicalStock;
+        if (delta === 0) {
+          return res.json({
+            success: true,
+            message: `El conteo físico (${counted}) coincide exactamente con el stock actual en sistema (${currentPhysicalStock}). No se requiere ajuste.`,
+            data: { previous_quantity: currentPhysicalStock, quantity: 0, new_quantity: currentPhysicalStock }
+          });
+        }
+        qty = delta;
+      } else if (adjustment_type === 'purchase_return') {
+        movType = 'purchase_return';
+        qty = -qty;
+      } else if (adjustment_type === 'initial') {
+        movType = 'initial';
+        qty = Math.abs(Number(quantity));
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: `Tipo de ajuste no válido: ${adjustment_type}. Tipos permitidos: in, out, physical_count, purchase_return, initial.`
+        });
+      }
 
       const result = await runTransaction(async (txDb) => {
         const mov = await InventoryService.recordMovement({
@@ -246,11 +280,11 @@ const inventoryController = {
       const transferNumber = generateCommercialId('TRF');
 
       const transferId = await runTransaction(async (txDb) => {
-        // Validate stock for all items
+        // Validate physical stock for all items
         for (const item of items) {
-          const currentStock = await InventoryService.getCurrentStock(from_warehouse_id, item.product_id, item.variant_id);
-          if (currentStock < Number(item.quantity)) {
-            throw new Error(`Stock insuficiente para el producto ID ${item.product_id}. Disponible: ${currentStock}, Solicitado: ${item.quantity}`);
+          const physicalStock = await InventoryService.getPhysicalStock(from_warehouse_id, item.product_id, item.variant_id);
+          if (physicalStock < Number(item.quantity)) {
+            throw new Error(`Stock físico insuficiente para transferir producto ID ${item.product_id}. Físico en almacén: ${physicalStock}, Solicitado: ${item.quantity}`);
           }
         }
 

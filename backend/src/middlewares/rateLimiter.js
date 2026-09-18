@@ -17,7 +17,7 @@ if (cleanupTimer.unref) {
 
 function loginRateLimiter(maxAttempts = 10, windowMs = 15 * 60 * 1000) {
   return (req, res, next) => {
-    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
     const username = req.body && req.body.username ? String(req.body.username).trim().toLowerCase() : '';
     const key = `${ip}:${username}`;
     const now = Date.now();

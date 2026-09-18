@@ -590,7 +590,7 @@ const adminController = {
         const dbPort = process.env.DB_PORT || '5432';
         const dbName = process.env.DB_NAME || 'nexus_erp';
         const dbUser = process.env.DB_USER || 'educrm_user';
-        const dbPassword = process.env.DB_PASSWORD || 'NuevaPasswordSegura';
+        const dbPassword = process.env.DB_PASSWORD || '';
 
         const args = [
           '-h', dbHost,

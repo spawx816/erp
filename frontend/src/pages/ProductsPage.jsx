@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Package, Plus, Search, Edit2, CheckCircle2, AlertCircle,
-  Layers, Tag, DollarSign, X, Filter
+  Package, Plus, Search, Edit2, ChevronLeft, ChevronRight,
+  X, Filter, SlidersHorizontal
 } from 'lucide-react';
 import api from '../services/api';
+import { useToast } from '../context/ToastContext';
 
 export default function ProductsPage({ user }) {
+  const { addToast } = useToast();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
@@ -13,8 +15,14 @@ export default function ProductsPage({ user }) {
   const [warehouses, setWarehouses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterBrand, setFilterBrand] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({});
+  const searchTimerRef = useRef(null);
 
   const isVendedor = user?.role_slug === 'vendedor';
 
@@ -48,8 +56,13 @@ export default function ProductsPage({ user }) {
   });
 
   useEffect(() => {
+    // Debounce search: reset page on filter change
+    setPage(1);
+  }, [search, filterCategory, filterBrand, filterType, filterStatus]);
+
+  useEffect(() => {
     loadProducts();
-  }, [page, search]);
+  }, [page, search, filterCategory, filterBrand, filterType, filterStatus]);
 
   useEffect(() => {
     loadMetadata();
@@ -75,7 +88,13 @@ export default function ProductsPage({ user }) {
   const loadProducts = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/catalog/products', { search, page, limit: 20 });
+      const params = { page, limit: 20 };
+      if (search)         params.search      = search;
+      if (filterCategory) params.category_id = filterCategory;
+      if (filterBrand)    params.brand_id    = filterBrand;
+      if (filterType)     params.type        = filterType;
+      if (filterStatus)   params.status      = filterStatus;
+      const res = await api.get('/catalog/products', params);
       if (res.success) {
         setProducts(res.data);
         setPagination(res.pagination);
@@ -86,6 +105,17 @@ export default function ProductsPage({ user }) {
       setLoading(false);
     }
   };
+
+  const clearFilters = () => {
+    setSearch('');
+    setFilterCategory('');
+    setFilterBrand('');
+    setFilterType('');
+    setFilterStatus('');
+    setPage(1);
+  };
+
+  const hasActiveFilters = search || filterCategory || filterBrand || filterType || filterStatus;
 
   const handleOpenCreate = () => {
     setModalMode('create');
@@ -178,20 +208,20 @@ export default function ProductsPage({ user }) {
       if (modalMode === 'create') {
         const res = await api.post('/catalog/products', formData);
         if (res.success) {
-          alert('Producto creado exitosamente.');
+          addToast('Producto creado exitosamente.', 'success');
           setShowModal(false);
           loadProducts();
         }
       } else {
         const res = await api.put(`/catalog/products/${editingId}`, formData);
         if (res.success) {
-          alert('Producto actualizado.');
+          addToast('Producto actualizado exitosamente.', 'success');
           setShowModal(false);
           loadProducts();
         }
       }
     } catch (err) {
-      alert(err.message || 'Error guardando producto.');
+      addToast(err.message || 'Error guardando producto.', 'error');
     }
   };
 
@@ -212,18 +242,86 @@ export default function ProductsPage({ user }) {
       </div>
 
       {/* Filter / Search Bar */}
-      <div className="card" style={{ padding: '14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <div style={{ position: 'relative', flex: 1 }}>
-          <Search size={16} color="var(--text-muted)" style={{ position: 'absolute', left: '12px', top: '12px' }} />
-          <input
-            type="text"
-            className="input-control"
-            placeholder="Buscar por nombre, SKU o código de barras..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ paddingLeft: '38px' }}
-          />
+      <div className="card" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {/* Row 1: search + toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <Search size={16} color="var(--text-muted)" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
+            <input
+              type="text"
+              className="input-control"
+              placeholder="Buscar por nombre, SKU o código de barras..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ paddingLeft: '38px' }}
+            />
+          </div>
+          <button
+            onClick={() => setShowFilters(v => !v)}
+            className={`btn ${showFilters ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            <SlidersHorizontal size={15} />
+            <span>Filtros{hasActiveFilters ? ` (${[filterCategory,filterBrand,filterType,filterStatus,search].filter(Boolean).length})` : ''}</span>
+          </button>
+          {hasActiveFilters && (
+            <button onClick={clearFilters} className="btn btn-secondary btn-sm" title="Limpiar filtros">
+              <X size={14} />
+            </button>
+          )}
         </div>
+
+        {/* Row 2: expanded filter dropdowns */}
+        {showFilters && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+            <div>
+              <label className="label-control" style={{ marginBottom: '4px' }}>Categoría</label>
+              <select
+                className="select-control"
+                value={filterCategory}
+                onChange={e => { setFilterCategory(e.target.value); setPage(1); }}
+              >
+                <option value="">Todas las categorías</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label-control" style={{ marginBottom: '4px' }}>Marca</label>
+              <select
+                className="select-control"
+                value={filterBrand}
+                onChange={e => { setFilterBrand(e.target.value); setPage(1); }}
+              >
+                <option value="">Todas las marcas</option>
+                {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label-control" style={{ marginBottom: '4px' }}>Tipo</label>
+              <select
+                className="select-control"
+                value={filterType}
+                onChange={e => { setFilterType(e.target.value); setPage(1); }}
+              >
+                <option value="">Todos los tipos</option>
+                <option value="physical">Producto Físico</option>
+                <option value="service">Servicio</option>
+              </select>
+            </div>
+            <div>
+              <label className="label-control" style={{ marginBottom: '4px' }}>Estado</label>
+              <select
+                className="select-control"
+                value={filterStatus}
+                onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
+              >
+                <option value="">Todos los estados</option>
+                <option value="active">Activo</option>
+                <option value="inactive">Inactivo</option>
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Products Table */}
@@ -239,6 +337,7 @@ export default function ProductsPage({ user }) {
               <th>Existencia Total</th>
               <th>Variantes</th>
               <th>Estado</th>
+              {!isVendedor && <th style={{ width: '60px' }}></th>}
             </tr>
           </thead>
           <tbody>
@@ -291,12 +390,64 @@ export default function ProductsPage({ user }) {
                       {p.status === 'active' ? 'Activo' : 'Inactivo'}
                     </span>
                   </td>
+                  {!isVendedor && (
+                    <td>
+                      <button
+                        onClick={() => handleOpenEdit(p)}
+                        className="btn btn-secondary btn-sm"
+                        title="Editar producto"
+                        style={{ padding: '5px 8px' }}
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))
             )}
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {pagination.pages > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 4px' }}>
+          <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            Mostrando {((pagination.page - 1) * pagination.limit) + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} de {pagination.total} productos
+          </span>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={pagination.page <= 1}
+              onClick={() => setPage(p => p - 1)}
+            >
+              <ChevronLeft size={15} />
+              <span>Anterior</span>
+            </button>
+            {Array.from({ length: pagination.pages }, (_, i) => i + 1)
+              .filter(n => Math.abs(n - pagination.page) <= 2)
+              .map(n => (
+                <button
+                  key={n}
+                  className={`btn btn-sm ${n === pagination.page ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setPage(n)}
+                  style={{ minWidth: '34px' }}
+                >
+                  {n}
+                </button>
+              ))
+            }
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={pagination.page >= pagination.pages}
+              onClick={() => setPage(p => p + 1)}
+            >
+              <span>Siguiente</span>
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* CREATE / EDIT PRODUCT MODAL */}
       {showModal && (

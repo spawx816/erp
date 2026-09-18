@@ -27,16 +27,31 @@ router.get('/customers', (req, res, next) => {
   return requirePermission('customers.view')(req, res, next);
 }, thirdPartiesController.getCustomers);
 router.get('/customers/:id/360', requirePermission('customers.view'), thirdPartiesController.getCustomer360);
+router.get('/customers/:id/credit-check', (req, res, next) => {
+  const perms = req.user?.permissions || [];
+  if (req.user?.role_slug === 'admin' || req.user?.role_slug === 'super-admin' || req.user?.role_slug === 'gerente' || perms.includes('*') || perms.includes('customers.view') || perms.includes('sales.view') || perms.includes('sales.create')) {
+    return next();
+  }
+  return requirePermission('customers.view')(req, res, next);
+}, thirdPartiesController.checkCustomerCredit);
 router.get('/customers/:id/statement', requirePermission('customers.view'), thirdPartiesController.getCustomerStatement);
 router.get('/customers/:id/collection-notes', requirePermission('customers.view'), thirdPartiesController.getCollectionNotes);
 router.post('/customers/:id/collection-notes', requirePermission('customers.edit'), thirdPartiesController.addCollectionNote);
 router.post('/customers', requirePermission('customers.create'), thirdPartiesController.createCustomer);
 router.post('/customers/:id/toggle-block', requirePermission('customers.block'), thirdPartiesController.toggleCustomerCreditBlock);
+router.post('/customers/:id/toggle-status', (req, res, next) => {
+  const perms = req.user?.permissions || [];
+  if (req.user?.role_slug === 'admin' || req.user?.role_slug === 'super-admin' || req.user?.role_slug === 'gerente' || perms.includes('*') || perms.includes('customers.manage') || perms.includes('customers.edit')) {
+    return next();
+  }
+  return requirePermission('customers.manage')(req, res, next);
+}, thirdPartiesController.toggleCustomerStatus);
 router.put('/customers/:id', requirePermission('customers.edit'), thirdPartiesController.updateCustomer);
 router.get('/rnc-lookup/:rnc', require('../fiscal/fiscalController').consultRNC);
 
 // Suppliers
 router.get('/suppliers', requirePermission('suppliers.view'), thirdPartiesController.getSuppliers);
+router.post('/suppliers/reconcile', requirePermission('suppliers.edit'), thirdPartiesController.reconcileSuppliers);
 router.get('/suppliers/:id', requirePermission('suppliers.view'), thirdPartiesController.getSupplierById);
 router.post('/suppliers', requirePermission('suppliers.create'), thirdPartiesController.createSupplier);
 router.put('/suppliers/:id', requirePermission('suppliers.edit'), thirdPartiesController.updateSupplier);

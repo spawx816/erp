@@ -5,7 +5,8 @@ import {
   Building2, CheckCircle2, ChevronRight, RefreshCw,
   Wallet, ShieldAlert, Layers, Target, BarChart3,
   Calendar, FileText, Activity, Percent, Warehouse,
-  Grid3X3, Truck, Boxes, Filter, X
+  Truck, Boxes, Filter, X,
+  Award, Flame, TrendingDown, ArrowRight
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -17,12 +18,28 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
   const [showCustomDate, setShowCustomDate] = useState(false);
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
+  const [productRankingView, setProductRankingView] = useState('top'); // 'top' | 'least'
 
   const isVendedor = user?.role_slug === 'vendedor';
   const isAlmacen = user?.role_slug === 'almacen';
 
   useEffect(() => {
     loadDashboard();
+
+    const handleGlobalUpdate = () => {
+      loadDashboard();
+    };
+    window.addEventListener('sgc:sale-completed', handleGlobalUpdate);
+    window.addEventListener('sgc:payment-recorded', handleGlobalUpdate);
+    window.addEventListener('sgc:credit-note-created', handleGlobalUpdate);
+    window.addEventListener('sgc:cash-session-changed', handleGlobalUpdate);
+
+    return () => {
+      window.removeEventListener('sgc:sale-completed', handleGlobalUpdate);
+      window.removeEventListener('sgc:payment-recorded', handleGlobalUpdate);
+      window.removeEventListener('sgc:credit-note-created', handleGlobalUpdate);
+      window.removeEventListener('sgc:cash-session-changed', handleGlobalUpdate);
+    };
   }, [activeBranch, period]);
 
   const loadDashboard = async () => {
@@ -440,24 +457,6 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
                   </div>
                 </div>
               </div>
-
-              {/* Warehouse KPI 8: Matriz de Tintes */}
-              <div className="card" onClick={() => onNavigate('dye-matrix')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Matriz de Tintes</span>
-                    <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                      Gama Activa
-                    </h4>
-                    <p style={{ fontSize: '0.72rem', color: '#ec4899', marginTop: '4px' }}>
-                      Series de tonos y formulaciones
-                    </p>
-                  </div>
-                  <div style={{ padding: '8px', background: 'rgba(236, 72, 153, 0.15)', borderRadius: '10px' }}>
-                    <Grid3X3 size={18} color="#ec4899" />
-                  </div>
-                </div>
-              </div>
             </>
           ) : (
             /* GENERAL & SELLER KPIS */
@@ -537,34 +536,47 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
               {/* If Vendedor: Show Meta and Comisiones */}
               {isVendedor ? (
                 <>
-                  {/* KPI Vendedor: Comisiones Est. */}
-                  <div className="card" onClick={() => onNavigate('commissions')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Comisiones Estimadas</span>
-                        <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--success)', marginTop: '4px' }}>
-                          RD$ {Number((kpis.sales_period || kpis.sales_month || 0) * (sellerCommissionRate / 100)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                        </h4>
-                        <p style={{ fontSize: '0.72rem', color: '#10b981', marginTop: '4px' }}>
-                          {sellerCommissionRate.toFixed(1)}% tasa asignada
-                        </p>
-                      </div>
-                      <div style={{ padding: '8px', background: 'rgba(16, 185, 129, 0.15)', borderRadius: '10px' }}>
-                        <Percent size={18} color="var(--success)" />
-                      </div>
-                    </div>
-                  </div>
+                  {/* KPI Vendedor: Comisiones Est. sobre Cobrado con umbral 70% */}
+                  {(() => {
+                    const sellerCollected = Number(kpis.collected_period || kpis.collected_month || 0);
+                    const sellerCompliance = sellerGoal > 0 ? (sellerCollected / sellerGoal) * 100 : 0;
+                    const sellerQualifies = sellerCompliance >= 70.0;
+                    const sellerEstCommission = sellerQualifies ? (sellerCollected * (sellerCommissionRate / 100)) : 0;
 
-                  {/* KPI Vendedor: Meta Mensual */}
+                    return (
+                      <div className="card" onClick={() => onNavigate('commissions')} style={{ padding: '16px 18px', cursor: 'pointer', transition: 'transform 0.15s ease' }} onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'} onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>
+                              Comisiones sobre Cobros
+                            </span>
+                            <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: sellerQualifies ? 'var(--success)' : '#f59e0b', marginTop: '4px' }}>
+                              RD$ {sellerEstCommission.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                            </h4>
+                            <p style={{ fontSize: '0.72rem', color: sellerQualifies ? '#10b981' : '#f59e0b', marginTop: '4px', fontWeight: 600 }}>
+                              {sellerQualifies
+                                ? `¡Meta 70% alcanzada (${sellerCompliance.toFixed(1)}%)! • ${sellerCommissionRate.toFixed(1)}% tasa`
+                                : `Cobro al ${sellerCompliance.toFixed(1)}% • Requiere mín. 70% (Falta ${(70 - sellerCompliance).toFixed(1)}%)`}
+                            </p>
+                          </div>
+                          <div style={{ padding: '8px', background: sellerQualifies ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)', borderRadius: '10px' }}>
+                            <Percent size={18} color={sellerQualifies ? 'var(--success)' : '#f59e0b'} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* KPI Vendedor: Meta Mensual de Cobro */}
                   <div className="card" style={{ padding: '16px 18px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Meta Comercial Mes</span>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>Meta de Cobro Mensual</span>
                         <h4 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
                           RD$ {Number(sellerGoal).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
                         </h4>
                         <p style={{ fontSize: '0.72rem', color: '#60a5fa', marginTop: '4px' }}>
-                          {Math.min(100, Math.round(((kpis.sales_period || kpis.sales_month || 0) / (sellerGoal || 1)) * 100))}% alcanzado
+                          {Math.min(100, Math.round(((Number(kpis.collected_period || kpis.collected_month || 0)) / (sellerGoal || 1)) * 100))}% recaudado (Umbral activación: 70%)
                         </p>
                       </div>
                       <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.15)', borderRadius: '10px' }}>
@@ -725,6 +737,166 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
         </div>
       </div>
 
+      {/* PODIO DE RENDIMIENTO DE PRODUCTOS: MÁS VENDIDO VS MENOS VENDIDO (OPCIÓN B) */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+          <h3 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Award size={17} color="#f59e0b" />
+            Rendimiento Comercial de Productos ({currentPeriodLabel})
+          </h3>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            Comparativa de mayor rotación vs productos en riesgo de estancamiento
+          </span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '16px' }}>
+          {/* Card 1: 🏆 Producto Más Vendido (Estrella del Período) */}
+          <div
+            className="card"
+            style={{
+              padding: '20px',
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+              background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(6, 78, 59, 0.03) 100%)',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Flame size={20} color="#10b981" />
+                </div>
+                <div>
+                  <span style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', color: '#10b981', letterSpacing: '0.05em' }}>
+                    Producto Estrella (+ Vendido)
+                  </span>
+                  <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                    Líder de Facturación
+                  </h4>
+                </div>
+              </div>
+              <span className="badge badge-success" style={{ fontSize: '0.72rem', padding: '3px 8px' }}>
+                Top 1 del Período
+              </span>
+            </div>
+
+            {charts.top_product ? (
+              <div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px', lineHeight: 1.3 }}>
+                  {charts.top_product.product_name}
+                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                  {charts.top_product.sku && (
+                    <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', background: 'var(--bg-card)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                      SKU: {charts.top_product.sku}
+                    </span>
+                  )}
+                  {charts.top_product.line && (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      • {charts.top_product.line}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', padding: '12px', background: 'var(--bg-card)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Unidades Vendidas</span>
+                    <p style={{ fontSize: '1.3rem', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
+                      {Number(charts.top_product.units_sold || 0).toLocaleString('es-DO')} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>und.</span>
+                    </p>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Total Facturado</span>
+                    <p style={{ fontSize: '1.3rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '2px' }}>
+                      RD$ {Number(charts.top_product.total_revenue || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                Sin ventas registradas en este período.
+              </p>
+            )}
+          </div>
+
+          {/* Card 2: 🧊 Producto Menos Vendido (En Riesgo / Menor Rotación) */}
+          <div
+            className="card"
+            style={{
+              padding: '20px',
+              border: '1px solid rgba(239, 68, 68, 0.35)',
+              background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(127, 29, 29, 0.03) 100%)',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <TrendingDown size={20} color="#ef4444" />
+                </div>
+                <div>
+                  <span style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', color: '#ef4444', letterSpacing: '0.05em' }}>
+                    Producto Menos Vendido (En Riesgo)
+                  </span>
+                  <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                    Alerta de Estancamiento
+                  </h4>
+                </div>
+              </div>
+              <button
+                onClick={() => onNavigate && onNavigate('inventory')}
+                className="btn btn-secondary btn-sm"
+                style={{ fontSize: '0.72rem', padding: '3px 8px', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+                title="Ver análisis de rotación completo en Inventario"
+              >
+                Ver Rotación <ArrowRight size={12} style={{ marginLeft: '4px' }} />
+              </button>
+            </div>
+
+            {charts.least_product ? (
+              <div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px', lineHeight: 1.3 }}>
+                  {charts.least_product.product_name}
+                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                  {charts.least_product.sku && (
+                    <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', background: 'var(--bg-card)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                      SKU: {charts.least_product.sku}
+                    </span>
+                  )}
+                  {charts.least_product.line && (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      • {charts.least_product.line}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', padding: '12px', background: 'var(--bg-card)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Stock Inmovilizado</span>
+                    <p style={{ fontSize: '1.3rem', fontWeight: 900, color: '#f59e0b', marginTop: '2px' }}>
+                      {Number(charts.least_product.current_stock || 0).toLocaleString('es-DO')} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>und.</span>
+                    </p>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Capital Inmovilizado</span>
+                    <p style={{ fontSize: '1.3rem', fontWeight: 900, color: '#ef4444', marginTop: '2px' }}>
+                      RD$ {(Number(charts.least_product.cost || 0) * Number(charts.least_product.current_stock || 0)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                No se detectaron productos en riesgo de estancamiento.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* VISUAL CHARTS & ANALYTICS GRIDS */}
       <div>
         <h3 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px' }}>
@@ -736,35 +908,92 @@ export default function DashboardPage({ user, activeBranch, onNavigate }) {
         </h3>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))', gap: '20px' }}>
-          {/* Chart: Top Productos Más Demandados / Despachos */}
+          {/* Chart: Top Productos Más Demandados vs Menos Vendidos (Interactivo con Selector) */}
           <div className="card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {isAlmacen ? '1. Top Artículos en Demanda & Salida' : 'Top Productos Líderes'}
+                  {productRankingView === 'top'
+                    ? (isAlmacen ? 'Top Artículos en Demanda & Salida' : 'Top Productos Más Vendidos')
+                    : 'Productos con Menor Venta / Estancamiento'}
                 </h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  {isAlmacen ? 'Mayor volumen despachado en el período' : `Artículos con mayor facturación (${currentPeriodLabel})`}
+                  {productRankingView === 'top'
+                    ? `Artículos con mayor facturación (${currentPeriodLabel})`
+                    : `Artículos en stock con menor rotación (${currentPeriodLabel})`}
                 </p>
               </div>
-              <Package size={18} color="#38bdf8" />
+
+              {/* Toggle Buttons: Top vs Least */}
+              <div style={{ display: 'flex', background: 'var(--bg-main)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <button
+                  onClick={() => setProductRankingView('top')}
+                  className={`btn btn-sm ${productRankingView === 'top' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '3px 10px', fontSize: '0.72rem' }}
+                >
+                  Más Vendidos
+                </button>
+                <button
+                  onClick={() => setProductRankingView('least')}
+                  className={`btn btn-sm ${productRankingView === 'least' ? 'btn-danger' : 'btn-secondary'}`}
+                  style={{
+                    padding: '3px 10px',
+                    fontSize: '0.72rem',
+                    background: productRankingView === 'least' ? '#ef4444' : undefined,
+                    color: productRankingView === 'least' ? '#fff' : undefined,
+                    borderColor: productRankingView === 'least' ? '#ef4444' : undefined
+                  }}
+                >
+                  Menos Vendidos
+                </button>
+              </div>
             </div>
 
+            {/* List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {charts.top_products && charts.top_products.length > 0 ? (
-                charts.top_products.map((prod, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
-                    <div>
-                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>{prod.product_name}</span>
-                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{prod.units_sold} unidades movidas</span>
+              {productRankingView === 'top' ? (
+                charts.top_products && charts.top_products.length > 0 ? (
+                  charts.top_products.map((prod, idx) => (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', width: '18px' }}>#{idx + 1}</span>
+                        <div>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>{prod.product_name}</span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{prod.units_sold} unidades vendidas {prod.sku ? `• ${prod.sku}` : ''}</span>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#38bdf8' }}>
+                        RD$ {Number(prod.total_revenue).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </span>
                     </div>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#38bdf8' }}>
-                      RD$ {Number(prod.total_revenue).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                ))
+                  ))
+                ) : (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>Sin movimientos de productos en este período.</p>
+                )
               ) : (
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>Sin movimientos de productos en este período.</p>
+                charts.least_products && charts.least_products.length > 0 ? (
+                  charts.least_products.map((prod, idx) => (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-card)', borderRadius: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#ef4444', width: '18px' }}>#{idx + 1}</span>
+                        <div>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>{prod.product_name}</span>
+                          <span style={{ fontSize: '0.68rem', color: '#f59e0b' }}>
+                            {Number(prod.current_stock || 0)} und. en stock • {prod.units_sold || 0} vendidas
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#ef4444', display: 'block' }}>
+                          RD$ {(Number(prod.cost || 0) * Number(prod.current_stock || 0)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </span>
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>capital inmovilizado</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px 0', textAlign: 'center' }}>No hay productos con bajo movimiento.</p>
+                )
               )}
             </div>
           </div>

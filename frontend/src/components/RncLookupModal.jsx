@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Search, ShieldCheck, ShieldAlert, Building2, User,
   Check, Copy, ExternalLink, X, RefreshCw, FileText
@@ -100,11 +101,20 @@ export default function RncLookupModal({ isOpen, onClose, onSelectCompany }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  return (
-    <div className="modal-overlay" onClick={onClose}>
+  const modalMarkup = (
+    <div className="modal-overlay" onClick={onClose} style={{ zIndex: 9999, position: 'fixed', inset: 0 }}>
       <div
         className="modal-content"
-        style={{ maxWidth: '640px', padding: '24px', background: 'var(--bg-header)', border: '1px solid var(--border-color)' }}
+        style={{
+          maxWidth: '640px',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          padding: '24px',
+          background: 'var(--bg-header)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '16px',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.75)'
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -375,4 +385,6 @@ export default function RncLookupModal({ isOpen, onClose, onSelectCompany }) {
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalMarkup, document.body) : modalMarkup;
 }

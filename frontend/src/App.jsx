@@ -9,10 +9,11 @@ import api from './services/api';
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const POSPage = lazy(() => import('./pages/POSPage'));
 const ProductsPage = lazy(() => import('./pages/ProductsPage'));
-const DyeMatrixPage = lazy(() => import('./pages/DyeMatrixPage'));
+const CatalogSettingsPage = lazy(() => import('./pages/CatalogSettingsPage'));
 const InventoryPage = lazy(() => import('./pages/InventoryPage'));
 const PurchasesPage = lazy(() => import('./pages/PurchasesPage'));
 const SalesHistoryPage = lazy(() => import('./pages/SalesHistoryPage'));
+const OrdersPage = lazy(() => import('./pages/OrdersPage'));
 const CreditNotesPage = lazy(() => import('./pages/CreditNotesPage'));
 const CashRegisterPage = lazy(() => import('./pages/CashRegisterPage'));
 const FinancePage = lazy(() => import('./pages/FinancePage'));
@@ -44,6 +45,23 @@ export default function App() {
 
   useEffect(() => {
     checkAuth();
+
+    const handleCashSessionChanged = (e) => {
+      const updatedSession = e.detail;
+      setActiveSession(updatedSession || null);
+    };
+
+    const handleRefreshUser = () => {
+      checkAuth();
+    };
+
+    window.addEventListener('sgc:cash-session-changed', handleCashSessionChanged);
+    window.addEventListener('sgc:refresh-user', handleRefreshUser);
+
+    return () => {
+      window.removeEventListener('sgc:cash-session-changed', handleCashSessionChanged);
+      window.removeEventListener('sgc:refresh-user', handleRefreshUser);
+    };
   }, []);
 
   const checkAuth = async () => {
@@ -127,6 +145,8 @@ export default function App() {
             onBranchChange={handleBranchChange}
             onLogout={handleLogout}
             onNavigate={setCurrentTab}
+            activeSession={activeSession}
+            onOpenCashModal={() => setCurrentTab('cash-register')}
           />
 
           <main style={{ flex: 1, overflowY: 'auto', padding: '24px', background: 'var(--bg-app)' }}>
@@ -139,7 +159,14 @@ export default function App() {
                   activeBranch={activeBranch}
                   activeSession={activeSession}
                   onRefreshSession={checkAuth}
+                  onNavigate={setCurrentTab}
+                  onOpenCashModal={() => setCurrentTab('cash-register')}
                 />
+              )}
+
+              {/* Pedidos Comerciales (Flujo Vendedor -> Gerencia -> Almacén) */}
+              {(currentTab === 'orders' || currentTab === 'sales-orders') && (
+                <OrdersPage user={user} activeBranch={activeBranch} onNavigate={setCurrentTab} />
               )}
 
               {/* Ventas & Historial */}
@@ -167,9 +194,9 @@ export default function App() {
               {currentTab === 'expenses' && <FinancePage user={user} activeBranch={activeBranch} initialTab="expenses" />}
               {currentTab === 'finance' && <FinancePage user={user} activeBranch={activeBranch} initialTab="cxc" />}
 
-              {/* Inventario & Tintes */}
+              {/* Inventario */}
               {currentTab === 'products' && <ProductsPage user={user} />}
-              {currentTab === 'dye-matrix' && <DyeMatrixPage user={user} onNavigateToPos={() => setCurrentTab('pos')} />}
+              {currentTab === 'catalog-settings' && <CatalogSettingsPage user={user} />}
               {currentTab === 'inventory' && <InventoryPage user={user} initialTab="stock" />}
               {currentTab === 'inventory-lots' && <InventoryPage user={user} initialTab="lots" />}
               {currentTab === 'inventory-analysis' && <InventoryPage user={user} initialTab="analysis" />}

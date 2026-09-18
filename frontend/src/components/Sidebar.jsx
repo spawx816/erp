@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import {
   LayoutDashboard, ShoppingCart, Receipt, RotateCcw,
-  Users, FileText, ShieldAlert, Map,
+  Users, FileText, ShieldAlert, Map, ClipboardList,
   HandCoins, History, CalendarClock, DollarSign,
-  Package, Grid3X3, Warehouse, Layers, Activity,
+  Package, Warehouse, Layers, Activity,
   ShoppingBag, Truck, CreditCard,
   ReceiptText, Wallet, CalendarDays,
   UserCheck, Percent,
@@ -42,9 +42,10 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       id: 'ventas',
       label: 'VENTAS',
       icon: Receipt,
-      roles: ['admin', 'gerente', 'cajero', 'vendedor'],
+      roles: ['admin', 'gerente', 'cajero', 'vendedor', 'almacen'],
       items: [
-        { id: 'pos', label: 'Facturación (POS)', icon: ShoppingCart, highlight: true },
+        { id: 'pos', label: user?.role_slug === 'vendedor' ? 'Punto de Venta (Pedidos)' : 'Punto de Venta (POS)', icon: ShoppingCart, highlight: true },
+        { id: 'orders', label: 'Pedidos Comerciales', icon: ClipboardList },
         { id: 'sales', label: 'Historial de Facturas', icon: Receipt },
         { id: 'credit-notes', label: 'Notas de Crédito (NCF B04)', icon: RotateCcw }
       ]
@@ -76,7 +77,7 @@ export default function Sidebar({ currentTab, setCurrentTab, user, onLogout }) {
       icon: Warehouse,
       items: [
         { id: 'products', label: 'Catálogo de Productos', icon: Package },
-        { id: 'dye-matrix', label: 'Matriz de Tintes', icon: Grid3X3, highlight: true },
+        { id: 'catalog-settings', label: 'Catálogo / Ajustes', icon: Settings, roles: ['admin', 'gerente'] },
         { id: 'inventory', label: 'Existencias & Kardex', icon: Warehouse, roles: ['admin', 'gerente', 'almacen'] },
         { id: 'inventory-lots', label: 'Lotes & Vencimientos', icon: Layers, roles: ['admin', 'gerente', 'almacen'] },
         { id: 'inventory-analysis', label: 'Rotación & Análisis ABC', icon: Activity, roles: ['admin', 'gerente', 'almacen'] }

@@ -1,27 +1,36 @@
-const { db } = require('../../database/db');
+const { db, runTransaction } = require('../../database/db');
 
 const InventoryService = {
   /**
    * Adjusts stock and logs an immutable Kardex movement.
    * Concurrency-safe, supports optional transactional db client (txClient).
+   * If txClient is not provided, automatically wraps execution in an atomic runTransaction.
    */
-  recordMovement: async ({
-    companyId,
-    branchId,
-    warehouseId,
-    toWarehouseId = null,
-    productId,
-    variantId = null,
-    userId,
-    movementType,
-    quantity, // positive to increase, negative to decrease
-    unitCost = 0,
-    referenceType = null,
-    referenceId = null,
-    reason = '',
-    txClient = null
-  }) => {
-    const activeDb = txClient || db;
+  recordMovement: async (params) => {
+    if (!params.txClient) {
+      return await runTransaction(async (txDb) => {
+        return await InventoryService.recordMovement({ ...params, txClient: txDb });
+      });
+    }
+
+    const {
+      companyId,
+      branchId,
+      warehouseId,
+      toWarehouseId = null,
+      productId,
+      variantId = null,
+      userId,
+      movementType,
+      quantity, // positive to increase, negative to decrease
+      unitCost = 0,
+      referenceType = null,
+      referenceId = null,
+      reason = '',
+      txClient
+    } = params;
+
+    const activeDb = txClient;
     const changeQty = Number(quantity);
 
     if (isNaN(changeQty) || !isFinite(changeQty)) {
@@ -51,49 +60,52 @@ const InventoryService = {
       }
     }
 
-    // 2. Fetch locked row
-    const lockClause = txClient ? ' FOR UPDATE' : '';
+    // 2. Fetch inventory record id and current reservation status
     let currentInv;
     if (variantId) {
       currentInv = await activeDb.prepare(`
         SELECT id, quantity, reserved_quantity
         FROM inventories
-        WHERE warehouse_id = ? AND product_id = ? AND variant_id = ?${lockClause}
+        WHERE warehouse_id = ? AND product_id = ? AND variant_id = ? FOR UPDATE
       `).get(warehouseId, productId, variantId);
     } else {
       currentInv = await activeDb.prepare(`
         SELECT id, quantity, reserved_quantity
         FROM inventories
-        WHERE warehouse_id = ? AND product_id = ? AND variant_id IS NULL${lockClause}
+        WHERE warehouse_id = ? AND product_id = ? AND variant_id IS NULL FOR UPDATE
       `).get(warehouseId, productId);
     }
 
-    const prevQty = currentInv ? Number(currentInv.quantity) : 0;
-    const reservedQty = currentInv ? Number(currentInv.reserved_quantity || 0) : 0;
-    const effectiveAvailable = prevQty - reservedQty;
-    const newQty = prevQty + changeQty;
-
-    // 3. Strict verification of physical stock & reserved stock under row-level lock
-    if (changeQty < 0 && !allowNegative) {
-      if (newQty < 0 || (effectiveAvailable + changeQty < 0 && movementType !== 'sale_checkout_reserved')) {
-        throw new Error(`Inventario insuficiente para el producto ID ${productId}. Stock actual: ${prevQty} (Disponible: ${Math.max(0, effectiveAvailable)}), Solicitado: ${Math.abs(changeQty)}`);
-      }
-    }
-
-    // 4. Update inventory atomically with database-level constraint
-    const updateRes = await activeDb.prepare(`
-      UPDATE inventories
-      SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND (? = true OR quantity + ? >= 0)
-    `).run(changeQty, currentInv.id, allowNegative ? true : false, changeQty);
-
-    if (updateRes.changes === 0 && changeQty < 0 && !allowNegative) {
-      throw new Error(`Conflicto de inventario concurrente: Stock insuficiente para el producto ID ${productId}.`);
+    if (!currentInv) {
+      throw new Error(`Registro de inventario no encontrado para el producto ID ${productId}.`);
     }
 
     const inventoryId = currentInv.id;
+    const initialPrevQty = Number(currentInv.quantity || 0);
+    const initialReservedQty = Number(currentInv.reserved_quantity || 0);
+    const reserveChange = Number(params.reserveChange || 0);
 
-    // 4. Record Kardex movement
+    // 3. Update inventory atomically with database-level constraint and RETURNING *
+    // When changeQty < 0 and allowNegative is false, we must guarantee available stock (quantity - reserved_quantity + changeQty >= 0)
+    const updateRes = await activeDb.prepare(`
+      UPDATE inventories
+      SET quantity = quantity + ?,
+          reserved_quantity = GREATEST(0, reserved_quantity + ?),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND (? = true OR (quantity - reserved_quantity + ?) >= 0)
+      RETURNING id, quantity, reserved_quantity
+    `).run(changeQty, reserveChange, inventoryId, allowNegative ? true : false, changeQty);
+
+    if (updateRes.changes === 0 && changeQty < 0 && !allowNegative) {
+      const availableStock = Math.max(0, initialPrevQty - initialReservedQty);
+      throw new Error(`Inventario insuficiente para el producto ID ${productId}. Stock físico: ${initialPrevQty}, Reservado: ${initialReservedQty} (Disponible: ${availableStock}), Solicitado: ${Math.abs(changeQty)}`);
+    }
+
+    const updatedRow = updateRes.row;
+    const newQty = updatedRow ? Number(updatedRow.quantity) : (initialPrevQty + changeQty);
+    const prevQty = newQty - changeQty;
+
+    // 4. Record Kardex movement (only if physical quantity changed or explicitly required)
     const totalCost = Math.round(Math.abs(changeQty) * Number(unitCost) * 100) / 100;
     const movResult = await activeDb.prepare(`
       INSERT INTO inventory_movements (
@@ -114,7 +126,8 @@ const InventoryService = {
       inventory_id: inventoryId,
       previous_quantity: prevQty,
       quantity: changeQty,
-      new_quantity: newQty
+      new_quantity: newQty,
+      reserved_quantity: updatedRow ? Number(updatedRow.reserved_quantity) : Math.max(0, initialReservedQty + reserveChange)
     };
   },
 
@@ -141,6 +154,10 @@ const InventoryService = {
     return Math.max(0, total - reserved);
   },
 
+  getAvailableStock: async (warehouseId, productId, variantId = null) => {
+    return await InventoryService.getCurrentStock(warehouseId, productId, variantId);
+  },
+
   getPhysicalStock: async (warehouseId, productId, variantId = null) => {
     let row;
     if (variantId) {
@@ -157,6 +174,55 @@ const InventoryService = {
       `).get(warehouseId, productId);
     }
     return row ? Number(row.quantity || 0) : 0;
+  },
+
+  reserveStock: async ({ companyId, warehouseId, productId, variantId = null, quantity, txClient = null }) => {
+    const qty = Math.abs(Number(quantity));
+    if (qty <= 0) return true;
+    const activeDb = txClient || db;
+    const res = await activeDb.prepare(`
+      UPDATE inventories
+      SET reserved_quantity = reserved_quantity + ?, updated_at = CURRENT_TIMESTAMP
+      WHERE warehouse_id = ? AND product_id = ? AND (? IS NULL OR variant_id = ?)
+        AND (quantity - reserved_quantity) >= ?
+      RETURNING id, quantity, reserved_quantity
+    `).run(qty, warehouseId, productId, variantId, variantId, qty);
+    if (res.changes === 0) {
+      throw new Error(`Stock insuficiente para reservar ${qty} unidades del producto ID ${productId}.`);
+    }
+    return res.row;
+  },
+
+  releaseStock: async ({ companyId, warehouseId, productId, variantId = null, quantity, txClient = null }) => {
+    const qty = Math.abs(Number(quantity));
+    if (qty <= 0) return true;
+    const activeDb = txClient || db;
+    const res = await activeDb.prepare(`
+      UPDATE inventories
+      SET reserved_quantity = GREATEST(0, reserved_quantity - ?), updated_at = CURRENT_TIMESTAMP
+      WHERE warehouse_id = ? AND product_id = ? AND (? IS NULL OR variant_id = ?)
+      RETURNING id, quantity, reserved_quantity
+    `).run(qty, warehouseId, productId, variantId, variantId);
+    return res.row;
+  },
+
+  addStockTransaction: async (params, txDb = null) => {
+    return await InventoryService.recordMovement({
+      companyId: params.companyId,
+      branchId: params.branchId,
+      warehouseId: params.warehouseId,
+      toWarehouseId: params.toWarehouseId || null,
+      productId: params.productId,
+      variantId: params.variantId || null,
+      userId: params.userId,
+      movementType: (params.type || 'purchase').toLowerCase(),
+      quantity: params.quantity,
+      unitCost: params.unitCost || 0,
+      referenceType: params.documentType || 'purchases',
+      referenceId: params.documentId || null,
+      reason: params.notes || params.reason || '',
+      txClient: params.txClient || txDb
+    });
   }
 };
 

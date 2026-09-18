@@ -33,7 +33,7 @@ async function runTest() {
   const custRes = await fetch(`${API}/third-parties/customers`, { headers });
   const custData = await custRes.json();
   console.log(`Customers found: ${custData.data.length}`);
-  const customer = custData.data[0];
+  const customer = custData.data.find(c => c.status === 'active') || custData.data[0];
 
   const itemPrice = Number(firstProd.price);
   const taxRate = Number(firstProd.tax_rate || 18);
