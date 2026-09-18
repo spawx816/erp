@@ -13,6 +13,9 @@ async function migrate() {
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
       order_number TEXT NOT NULL,
       fiscal_type_code TEXT DEFAULT 'B02',
+      payment_type TEXT DEFAULT 'cash',
+      credit_days INTEGER DEFAULT 0,
+      due_date DATE,
       subtotal NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
       discount_amount NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
       tax_amount NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
@@ -29,6 +32,10 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(company_id, order_number)
     );
+
+    ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'cash';
+    ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS credit_days INTEGER DEFAULT 0;
+    ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS due_date DATE;
 
     CREATE TABLE IF NOT EXISTS sales_order_items (
       id SERIAL PRIMARY KEY,
