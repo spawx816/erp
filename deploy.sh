@@ -71,7 +71,7 @@ fi
 
 echo "🎨 3. Compilando Frontend React..."
 cd ../frontend
-npm install --include=dev
+NODE_ENV=development npm install
 npm run build
 cd ../backend
 
