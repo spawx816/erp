@@ -10,6 +10,7 @@ ALTER TABLE accounts_receivable ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ 
 ALTER TABLE accounts_payable ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE discount_authorizations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE salespeople ADD COLUMN IF NOT EXISTS commission_calculation_type TEXT DEFAULT 'invoiced';
 
 -- 2. Restricciones e Índices únicos para prevenir carreras de concurrencia
 
