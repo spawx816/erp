@@ -56,6 +56,10 @@ if command -v psql &> /dev/null; then
     echo "⚡ Aplicando migraciones de esquema idempotentes (migrations.sql)..."
     PGPASSWORD="${DB_PASSWORD}" psql -v ON_ERROR_STOP=1 -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -f src/database/migrations.sql
 
+    echo "📦 Sincronizando tablas y permisos de pedidos de venta..."
+    node scripts/migrate_sales_orders.js
+    node scripts/fix-permissions.js
+
     # 2.2 Sembrar únicamente si la base está completamente vacía
     HAS_DATA=$(PGPASSWORD="${DB_PASSWORD}" psql -U "$DB_USER_VAL" -d "$DB_NAME_VAL" -h "$DB_HOST_VAL" -p "$DB_PORT_VAL" -t -A -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'companies';" 2>/dev/null || echo "0")
     if [ "$HAS_DATA" = "1" ]; then
