@@ -23,6 +23,7 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
     cash_register_id: '',
     initial_cash: '5000'
   });
+  const [openError, setOpenError] = useState('');
 
   // Movement Form
   const [movementData, setMovementData] = useState({
@@ -80,6 +81,7 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
 
   const handleOpenSubmit = async (e) => {
     e.preventDefault();
+    setOpenError('');
     try {
       const res = await api.post('/cash/open', openData);
       if (res.success) {
@@ -90,7 +92,9 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
         if (onRefreshUser) onRefreshUser();
       }
     } catch (err) {
-      toast.error(err.message || 'Error abriendo caja.');
+      const msg = err.message || 'Error abriendo caja.';
+      setOpenError(msg);
+      toast.error(msg);
     }
   };
 
@@ -146,7 +150,9 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
           {!sessionDetail ? (
             <button
               onClick={() => {
-                setOpenData({ cash_register_id: registers[0]?.id || '', initial_cash: '5000' });
+                const firstAvailable = registers.find(r => !r.active_session_id);
+                setOpenData({ cash_register_id: firstAvailable?.id || registers[0]?.id || '', initial_cash: '5000' });
+                setOpenError('');
                 setShowOpenModal(true);
               }}
               className="btn btn-primary"
@@ -290,6 +296,19 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
               Apertura de Turno de Caja
             </h3>
             <form onSubmit={handleOpenSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {openError && (
+                <div style={{
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  color: '#f87171',
+                  fontSize: '0.85rem'
+                }}>
+                  ⚠️ {openError}
+                </div>
+              )}
+
               <div>
                 <label className="label-control">Caja Registradora *</label>
                 <select
@@ -298,7 +317,11 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
                   value={openData.cash_register_id}
                   onChange={(e) => setOpenData({ ...openData, cash_register_id: e.target.value })}
                 >
-                  {registers.map(r => <option key={r.id} value={r.id}>{r.name} ({r.code})</option>)}
+                  {registers.map(r => (
+                    <option key={r.id} value={r.id} disabled={Boolean(r.active_session_id)}>
+                      {r.name} ({r.code}) {r.active_session_id ? `— [En uso por ${r.active_cashier || 'otro usuario'}]` : '— [Disponible]'}
+                    </option>
+                  ))}
                 </select>
               </div>
 
