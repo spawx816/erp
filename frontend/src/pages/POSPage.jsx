@@ -143,14 +143,14 @@ export default function POSPage({ user, activeBranch, activeSession, onOpenCashM
         api.get('/admin/branches-warehouses')
       ]);
 
-      if (prodsRes.success) setProducts(prodsRes.data);
-      if (catsRes.success) setCategories(catsRes.data);
-      if (custsRes.success) {
-        setCustomers(custsRes.data);
+      if (prodsRes && prodsRes.success) setProducts(Array.isArray(prodsRes.data) ? prodsRes.data : []);
+      if (catsRes && catsRes.success) setCategories(Array.isArray(catsRes.data) ? catsRes.data : []);
+      if (custsRes && custsRes.success) {
+        setCustomers(Array.isArray(custsRes.data) ? custsRes.data : []);
         // Start in blank as requested to prevent accidental misallocation
         setSelectedCustomer(null);
       }
-      if (branchRes.success && Array.isArray(branchRes.warehouses)) {
+      if (branchRes && branchRes.success && Array.isArray(branchRes.warehouses)) {
         setAllWarehouses(branchRes.warehouses);
         const branchWarehouses = activeBranch?.id
           ? branchRes.warehouses.filter(w => Number(w.branch_id) === Number(activeBranch.id))
