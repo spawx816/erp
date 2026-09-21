@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   CalendarDays, Plus, DollarSign, CheckCircle2,
   AlertTriangle, Clock, Calendar, Check,
@@ -6,12 +6,17 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function RecurringExpensesPage() {
   const { addToast } = useToast();
   const [expenses, setExpenses] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Pagination State
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
 
   // Pay Modal State
   const [payModalItem, setPayModalItem] = useState(null);
@@ -113,6 +118,11 @@ export default function RecurringExpensesPage() {
   const overdueCount = expenses.filter(e => e.status === 'overdue').length;
   const upcomingCount = expenses.filter(e => e.status === 'upcoming').length;
 
+  const paginatedExpenses = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return expenses.slice(start, start + pageSize);
+  }, [expenses, page, pageSize]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
       {/* Header Banner */}
@@ -131,59 +141,59 @@ export default function RecurringExpensesPage() {
           <div style={{
             width: '52px',
             height: '52px',
-            borderRadius: '14px',
-            background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+            borderRadius: '12px',
+            background: 'rgba(59, 130, 246, 0.1)',
+            border: '1px solid rgba(59, 130, 246, 0.2)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            boxShadow: '0 4px 20px rgba(245, 158, 11, 0.35)'
+            color: 'var(--accent-blue)'
           }}>
-            <CalendarDays size={28} color="#fff" />
+            <CalendarDays size={26} />
           </div>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-                Calendario de Pagos Fijos & Obligaciones
-              </h2>
-              <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.4)' }}>
-                Sección 26
-              </span>
-            </div>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-              Programación de gastos fijos mensuales (Alquiler, Nómina, Luz, Internet, Seguros, TSS) con alertas automáticas de vencimiento
+            <h1 style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.02em' }}>
+              Gastos Recurrentes y Pagos Fijos
+            </h1>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '4px' }}>
+              Planificación, alertas tempranas y liquidación de cuotas periódicas fijas.
             </p>
           </div>
         </div>
 
-        <button onClick={() => setShowNewModal(true)} className="btn btn-primary">
-          <Plus size={16} />
-          <span>Nueva Obligación</span>
+        <button
+          onClick={() => setShowNewModal(true)}
+          className="btn btn-primary"
+          style={{ padding: '10px 18px', display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          <Plus size={18} />
+          <span>Agendar Obligación</span>
         </button>
       </div>
 
       {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
         <div className="card" style={{ padding: '16px 20px' }}>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>
-            Compromiso Mensual Fijo
+            Compromiso Fijo Mensual
           </span>
           <h3 style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
             RD$ {totalMonthlyCommitment.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
           </h3>
           <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-            {expenses.length} obligaciones recurrentes activas
+            Total proyectado en cuotas fijas activas
           </p>
         </div>
 
         <div className="card" style={{ padding: '16px 20px' }}>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>
-            Obligaciones Vencidas
+            Pagos Vencidos
           </span>
-          <h3 style={{ fontSize: '1.6rem', fontWeight: 800, color: overdueCount > 0 ? 'var(--danger)' : 'var(--success)', marginTop: '4px' }}>
+          <h3 style={{ fontSize: '1.6rem', fontWeight: 800, color: '#ef4444', marginTop: '4px' }}>
             {overdueCount}
           </h3>
-          <p style={{ fontSize: '0.72rem', color: overdueCount > 0 ? 'var(--danger)' : 'var(--success)', marginTop: '2px' }}>
-            {overdueCount > 0 ? 'Requiere pago prioritario inmediato' : 'Todo al día sin atrasos'}
+          <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Cuotas con fecha límite superada
           </p>
         </div>
 
@@ -222,7 +232,7 @@ export default function RecurringExpensesPage() {
             ) : expenses.length === 0 ? (
               <tr><td colSpan="9" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay obligaciones recurrentes registradas.</td></tr>
             ) : (
-              expenses.map(item => {
+              paginatedExpenses.map(item => {
                 const isOverdue = item.status === 'overdue';
                 const isUpcoming = item.status === 'upcoming';
 
@@ -280,6 +290,14 @@ export default function RecurringExpensesPage() {
             )}
           </tbody>
         </table>
+        <Pagination
+          currentPage={page}
+          totalItems={expenses.length}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(1); }}
+          itemLabel="obligaciones"
+        />
       </div>
 
       {/* PAY MODAL */}

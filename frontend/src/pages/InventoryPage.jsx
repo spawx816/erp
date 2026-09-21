@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function InventoryPage({ initialTab = 'stock' }) {
   const { addToast } = useToast();
@@ -29,6 +30,16 @@ export default function InventoryPage({ initialTab = 'stock' }) {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+
+  // Pagination states
+  const [stockPage, setStockPage] = useState(1);
+  const [stockPageSize, setStockPageSize] = useState(15);
+  const [kardexPage, setKardexPage] = useState(1);
+  const [kardexPageSize, setKardexPageSize] = useState(15);
+  const [lotsPage, setLotsPage] = useState(1);
+  const [lotsPageSize, setLotsPageSize] = useState(15);
+  const [transfersPage, setTransfersPage] = useState(1);
+  const [transfersPageSize, setTransfersPageSize] = useState(15);
 
   const [kardexMovementType, setKardexMovementType] = useState('all');
 
@@ -274,6 +285,26 @@ export default function InventoryPage({ initialTab = 'stock' }) {
     }
   };
 
+  const paginatedStock = useMemo(() => {
+    const start = (stockPage - 1) * stockPageSize;
+    return stockList.slice(start, start + stockPageSize);
+  }, [stockList, stockPage, stockPageSize]);
+
+  const paginatedKardex = useMemo(() => {
+    const start = (kardexPage - 1) * kardexPageSize;
+    return kardexList.slice(start, start + kardexPageSize);
+  }, [kardexList, kardexPage, kardexPageSize]);
+
+  const paginatedLots = useMemo(() => {
+    const start = (lotsPage - 1) * lotsPageSize;
+    return lotsList.slice(start, start + lotsPageSize);
+  }, [lotsList, lotsPage, lotsPageSize]);
+
+  const paginatedTransfers = useMemo(() => {
+    const start = (transfersPage - 1) * transfersPageSize;
+    return transfers.slice(start, start + transfersPageSize);
+  }, [transfers, transfersPage, transfersPageSize]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
       {/* Header Banner */}
@@ -427,112 +458,138 @@ export default function InventoryPage({ initialTab = 'stock' }) {
 
       {/* TAB 1: STOCK EXISTENCIAS */}
       {activeTab === 'stock' && (
-        <div className="table-container">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Código / SKU</th>
-                <th>Producto</th>
-                <th>Línea / Tono</th>
-                <th>Almacén</th>
-                <th>Stock Actual</th>
-                <th>Mínimo Alerta</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px' }}>Cargando stock...</td></tr>
-              ) : stockList.length === 0 ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay existencias registradas.</td></tr>
-              ) : (
-                stockList.map((item, idx) => {
-                  const isLow = Number(item.quantity) <= Number(item.stock_min);
-                  const isOut = Number(item.quantity) <= 0;
+        <>
+          <div className="table-container">
+            <table className="custom-table">
+              <thead>
+                <tr>
+                  <th>Código / SKU</th>
+                  <th>Producto</th>
+                  <th>Línea / Tono</th>
+                  <th>Almacén</th>
+                  <th>Stock Actual</th>
+                  <th>Mínimo Alerta</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px' }}>Cargando stock...</td></tr>
+                ) : stockList.length === 0 ? (
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay existencias registradas.</td></tr>
+                ) : (
+                  paginatedStock.map((item, idx) => {
+                    const isLow = Number(item.quantity) <= Number(item.stock_min);
+                    const isOut = Number(item.quantity) <= 0;
 
-                  return (
-                    <tr key={idx}>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', fontWeight: 600 }}>{item.sku || item.product_sku}</td>
-                      <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{item.product_name}</td>
-                      <td>
-                        {item.shade_number ? (
-                          <span className="badge" style={{ background: 'rgba(236, 72, 153, 0.15)', color: '#f472b6' }}>
-                            Tono {item.shade_number}
+                    return (
+                      <tr key={idx}>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', fontWeight: 600 }}>{item.sku || item.product_sku}</td>
+                        <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{item.product_name}</td>
+                        <td>
+                          {item.shade_number ? (
+                            <span className="badge" style={{ background: 'rgba(236, 72, 153, 0.15)', color: '#f472b6' }}>
+                              Tono {item.shade_number}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{item.line || '-'}</span>
+                          )}
+                        </td>
+                        <td>{item.warehouse_name}</td>
+                        <td style={{ fontWeight: 800, fontSize: '0.95rem', color: isOut ? 'var(--danger)' : isLow ? 'var(--warning)' : 'var(--success)' }}>
+                          {item.quantity} {item.unit_code || 'und'}
+                        </td>
+                        <td>{item.stock_min}</td>
+                        <td>
+                          <span className={`badge ${isOut ? 'badge-danger' : isLow ? 'badge-warning' : 'badge-success'}`}>
+                            {isOut ? 'Agotado' : isLow ? 'Stock Bajo' : 'Óptimo'}
                           </span>
-                        ) : (
-                          <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{item.line || '-'}</span>
-                        )}
-                      </td>
-                      <td>{item.warehouse_name}</td>
-                      <td style={{ fontWeight: 800, fontSize: '0.95rem', color: isOut ? 'var(--danger)' : isLow ? 'var(--warning)' : 'var(--success)' }}>
-                        {item.quantity} {item.unit_code || 'und'}
-                      </td>
-                      <td>{item.stock_min}</td>
-                      <td>
-                        <span className={`badge ${isOut ? 'badge-danger' : isLow ? 'badge-warning' : 'badge-success'}`}>
-                          {isOut ? 'Agotado' : isLow ? 'Stock Bajo' : 'Óptimo'}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+          {stockList.length > 0 && (
+            <Pagination
+              currentPage={stockPage}
+              totalItems={stockList.length}
+              pageSize={stockPageSize}
+              onPageChange={setStockPage}
+              onPageSizeChange={setStockPageSize}
+              itemLabel="productos en stock"
+              disabled={loading}
+            />
+          )}
+        </>
       )}
 
       {/* TAB 2: KARDEX */}
       {activeTab === 'kardex' && (
-        <div className="table-container">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Fecha / Hora</th>
-                <th>Almacén</th>
-                <th>Producto / SKU</th>
-                <th>Tipo Movimiento</th>
-                <th>Cantidad</th>
-                <th>Stock Resultante</th>
-                <th>Usuario / Referencia</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px' }}>Cargando kardex...</td></tr>
-              ) : kardexList.length === 0 ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay movimientos registrados.</td></tr>
-              ) : (
-                kardexList.map(k => {
-                  const isPositive = Number(k.quantity) > 0;
-                  return (
-                    <tr key={k.id}>
-                      <td style={{ fontSize: '0.78rem' }}>{new Date(k.created_at).toLocaleString('es-DO')}</td>
-                      <td>{k.warehouse_name}</td>
-                      <td>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{k.product_name}</div>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{k.sku || k.product_sku}</span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isPositive ? 'badge-success' : 'badge-warning'}`} style={{ textTransform: 'capitalize' }}>
-                          {k.movement_type.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td style={{ fontWeight: 800, color: isPositive ? 'var(--success)' : 'var(--danger)' }}>
-                        {isPositive ? `+${k.quantity}` : k.quantity}
-                      </td>
-                      <td style={{ fontWeight: 800, color: '#38bdf8' }}>{k.new_quantity}</td>
-                      <td style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                        <div>{k.user_name || k.username || 'Sistema'}</div>
-                        {k.reason && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{k.reason}</span>}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="table-container">
+            <table className="custom-table">
+              <thead>
+                <tr>
+                  <th>Fecha / Hora</th>
+                  <th>Almacén</th>
+                  <th>Producto / SKU</th>
+                  <th>Tipo Movimiento</th>
+                  <th>Cantidad</th>
+                  <th>Stock Resultante</th>
+                  <th>Usuario / Referencia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px' }}>Cargando kardex...</td></tr>
+                ) : kardexList.length === 0 ? (
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay movimientos registrados.</td></tr>
+                ) : (
+                  paginatedKardex.map(k => {
+                    const isPositive = Number(k.quantity) > 0;
+                    return (
+                      <tr key={k.id}>
+                        <td style={{ fontSize: '0.78rem' }}>{new Date(k.created_at).toLocaleString('es-DO')}</td>
+                        <td>{k.warehouse_name}</td>
+                        <td>
+                          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{k.product_name}</div>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{k.sku || k.product_sku}</span>
+                        </td>
+                        <td>
+                          <span className={`badge ${isPositive ? 'badge-success' : 'badge-warning'}`} style={{ textTransform: 'capitalize' }}>
+                            {k.movement_type.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td style={{ fontWeight: 800, color: isPositive ? 'var(--success)' : 'var(--danger)' }}>
+                          {isPositive ? `+${k.quantity}` : k.quantity}
+                        </td>
+                        <td style={{ fontWeight: 800, color: '#38bdf8' }}>{k.new_quantity}</td>
+                        <td style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                          <div>{k.user_name || k.username || 'Sistema'}</div>
+                          {k.reason && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{k.reason}</span>}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+          {kardexList.length > 0 && (
+            <Pagination
+              currentPage={kardexPage}
+              totalItems={kardexList.length}
+              pageSize={kardexPageSize}
+              onPageChange={setKardexPage}
+              onPageSizeChange={setKardexPageSize}
+              itemLabel="movimientos de kardex"
+              disabled={loading}
+            />
+          )}
+        </>
       )}
 
       {/* TAB 3: LOTES & ANTIGÜEDAD (SECTION #19) */}
@@ -559,7 +616,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
                 ) : lotsList.length === 0 ? (
                   <tr><td colSpan="9" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay lotes registrados.</td></tr>
                 ) : (
-                  lotsList.map(lot => {
+                  paginatedLots.map(lot => {
                     const daysToExp = Number(lot.days_to_expiration);
                     const isNearExp = daysToExp <= 60 && daysToExp > 0;
                     const isExpired = daysToExp <= 0;
@@ -601,6 +658,17 @@ export default function InventoryPage({ initialTab = 'stock' }) {
               </tbody>
             </table>
           </div>
+          {lotsList.length > 0 && (
+            <Pagination
+              currentPage={lotsPage}
+              totalItems={lotsList.length}
+              pageSize={lotsPageSize}
+              onPageChange={setLotsPage}
+              onPageSizeChange={setLotsPageSize}
+              itemLabel="lotes"
+              disabled={loading}
+            />
+          )}
         </div>
       )}
 
@@ -983,7 +1051,7 @@ export default function InventoryPage({ initialTab = 'stock' }) {
               ) : transfers.length === 0 ? (
                 <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay transferencias registradas.</td></tr>
               ) : (
-                transfers.map(tr => (
+                paginatedTransfers.map(tr => (
                   <tr key={tr.id}>
                     <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{tr.transfer_number}</td>
                     <td>{tr.from_warehouse_name}</td>
@@ -1010,6 +1078,14 @@ export default function InventoryPage({ initialTab = 'stock' }) {
               )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={transfersPage}
+            totalItems={transfers.length}
+            pageSize={transfersPageSize}
+            onPageChange={setTransfersPage}
+            onPageSizeChange={(newSize) => { setTransfersPageSize(newSize); setTransfersPage(1); }}
+            itemLabel="transferencias"
+          />
         </div>
       )}
 

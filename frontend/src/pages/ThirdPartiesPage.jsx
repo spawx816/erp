@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users, Building, Plus, Search, Eye, Phone, Mail,
   MapPin, DollarSign, Clock, Package, X, CheckCircle,
@@ -13,6 +13,7 @@ import {
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
 import RncLookupModal from '../components/RncLookupModal';
+import Pagination from '../components/Pagination';
 
 export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate }) {
   const { addToast } = useToast();
@@ -38,6 +39,16 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
   const [filterRisk, setFilterRisk] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL'); // 'ALL' | 'active' | 'inactive'
   const [statementViewMode, setStatementViewMode] = useState('detailed'); // 'detailed' | 'ledger'
+
+  // Pagination states
+  const [custPage, setCustPage] = useState(1);
+  const [custPageSize, setCustPageSize] = useState(12);
+  const [suppPage, setSuppPage] = useState(1);
+  const [suppPageSize, setSuppPageSize] = useState(10);
+  const [stmtPage, setStmtPage] = useState(1);
+  const [stmtPageSize, setStmtPageSize] = useState(10);
+  const [riskPage, setRiskPage] = useState(1);
+  const [riskPageSize, setRiskPageSize] = useState(10);
 
   // Customer Statement State
   const [statementCustomerId, setStatementCustomerId] = useState(null);
@@ -531,10 +542,31 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
     }
   };
 
-  const displayedCustomers = customers.filter(c => {
-    if (filterStatus !== 'ALL' && (c.status || 'active') !== filterStatus) return false;
-    return true;
-  });
+  useEffect(() => {
+    setCustPage(1);
+  }, [search, filterStatus, filterRisk]);
+
+  useEffect(() => {
+    setSuppPage(1);
+  }, [search]);
+
+  const displayedCustomers = useMemo(() => {
+    return customers.filter(c => {
+      if (filterStatus !== 'ALL' && (c.status || 'active') !== filterStatus) return false;
+      if (filterRisk !== 'ALL' && (c.risk_score || 'low') !== filterRisk) return false;
+      return true;
+    });
+  }, [customers, filterStatus, filterRisk]);
+
+  const paginatedCustomers = useMemo(() => {
+    const start = (custPage - 1) * custPageSize;
+    return displayedCustomers.slice(start, start + custPageSize);
+  }, [displayedCustomers, custPage, custPageSize]);
+
+  const paginatedSuppliers = useMemo(() => {
+    const start = (suppPage - 1) * suppPageSize;
+    return suppliers.slice(start, start + suppPageSize);
+  }, [suppliers, suppPage, suppPageSize]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -712,247 +744,304 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
 
       {/* CUSTOMERS VIEW: CARDS (SECTION #38) */}
       {activeTab === 'customers' && viewMode === 'cards' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: '16px' }}>
-          {loading ? (
-            <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px' }}>Cargando clientes...</div>
-          ) : displayedCustomers.length === 0 ? (
-            <div className="card" style={{ gridColumn: '1 / -1', padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-              No se encontraron clientes para los filtros seleccionados.
-            </div>
-          ) : (
-            displayedCustomers.map(c => {
-              const limitAmt = Number(c.credit_limit || 0);
-              const balance = Number(c.current_balance || 0);
-              const usedPct = limitAmt > 0 ? Math.min(100, Math.round((balance / limitAmt) * 100)) : 0;
-              const overdueCount = Number(c.overdue_invoices_count || 0);
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: '16px' }}>
+            {loading ? (
+              <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px' }}>Cargando clientes...</div>
+            ) : displayedCustomers.length === 0 ? (
+              <div className="card" style={{ gridColumn: '1 / -1', padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                No se encontraron clientes para los filtros seleccionados.
+              </div>
+            ) : (
+              paginatedCustomers.map(c => {
+                const limitAmt = Number(c.credit_limit || 0);
+                const balance = Number(c.current_balance || 0);
+                const usedPct = limitAmt > 0 ? Math.min(100, Math.round((balance / limitAmt) * 100)) : 0;
+                const overdueCount = Number(c.overdue_invoices_count || 0);
 
-              // Semaphore Colors
-              const barColor = usedPct >= 85 || overdueCount > 0 ? '#ef4444' : usedPct >= 60 ? '#f59e0b' : '#10b981';
-              const riskBadgeClass = c.risk_score === 'critical' ? 'badge-danger' : c.risk_score === 'high' ? 'badge-warning' : 'badge-success';
-              const riskLabel = c.risk_score === 'critical' ? 'Riesgo Crítico' : c.risk_score === 'high' ? 'Riesgo Alto' : c.risk_score === 'medium' ? 'Riesgo Medio' : 'Riesgo Bajo';
-              const isInactive = c.status === 'inactive';
+                // Semaphore Colors
+                const barColor = usedPct >= 85 || overdueCount > 0 ? '#ef4444' : usedPct >= 60 ? '#f59e0b' : '#10b981';
+                const riskBadgeClass = c.risk_score === 'critical' ? 'badge-danger' : c.risk_score === 'high' ? 'badge-warning' : 'badge-success';
+                const riskLabel = c.risk_score === 'critical' ? 'Riesgo Crítico' : c.risk_score === 'high' ? 'Riesgo Alto' : c.risk_score === 'medium' ? 'Riesgo Medio' : 'Riesgo Bajo';
+                const isInactive = c.status === 'inactive';
 
-              return (
-                <div
-                  key={c.id}
-                  className="card"
-                  style={{
-                    padding: '18px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '14px',
-                    border: `1px solid ${isInactive ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)'}`,
-                    opacity: isInactive ? 0.75 : 1,
-                    transition: 'all 0.18s ease'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = isInactive ? 'rgba(239, 68, 68, 0.7)' : 'rgba(59, 130, 246, 0.4)';
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = isInactive ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)';
-                    e.currentTarget.style.transform = 'none';
-                  }}
-                >
-                  {/* Top: Avatar & Name & Status */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <div style={{
-                        width: '42px',
-                        height: '42px',
-                        borderRadius: '10px',
-                        background: isInactive ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-subtle-2)',
-                        border: `1px solid ${isInactive ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-color)'}`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 800,
-                        fontSize: '1rem',
-                        color: isInactive ? '#ef4444' : '#38bdf8'
-                      }}>
-                        {(c.company_name || c.first_name || 'C').slice(0, 2).toUpperCase()}
-                      </div>
-                      <div>
-                        <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)', lineHeight: '1.2' }}>
-                          {c.company_name || `${c.first_name} ${c.last_name}`}
-                        </h4>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                          {c.tax_id || c.id_card || 'Consumidor Final'} • {c.city || 'Santo Domingo'}
+                return (
+                  <div
+                    key={c.id}
+                    className="card"
+                    style={{
+                      padding: '18px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '14px',
+                      border: `1px solid ${isInactive ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)'}`,
+                      opacity: isInactive ? 0.75 : 1,
+                      transition: 'all 0.18s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = isInactive ? 'rgba(239, 68, 68, 0.7)' : 'rgba(59, 130, 246, 0.4)';
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = isInactive ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)';
+                      e.currentTarget.style.transform = 'none';
+                    }}
+                  >
+                    <div>
+                      {/* Card Header */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                              {c.company_name || `${c.first_name} ${c.last_name}`}
+                            </h4>
+                            {isInactive && (
+                              <span className="badge badge-danger" style={{ fontSize: '0.65rem', padding: '1px 5px' }}>Inactivo</span>
+                            )}
+                          </div>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                            {c.tax_id || c.id_card || 'Consumidor Final'}
+                          </span>
+                        </div>
+                        <span className={`badge ${riskBadgeClass}`} style={{ fontSize: '0.7rem' }}>
+                          {riskLabel}
                         </span>
                       </div>
+
+                      {/* Info lines */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <UserCheck size={13} color="var(--text-muted)" />
+                          <span>Vendedor: <strong style={{ color: 'var(--text-primary)' }}>{c.salesperson_name || 'Carlos Mendoza'}</strong></span>
+                        </div>
+                        {c.phone && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Phone size={13} color="var(--text-muted)" />
+                            <span>{c.phone}</span>
+                          </div>
+                        )}
+                        {c.city && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <MapPin size={13} color="var(--text-muted)" />
+                            <span>{c.city}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                      <span className={`badge ${isInactive ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.62rem' }}>
-                        {isInactive ? '🚫 Inactivo' : '✅ Activo'}
-                      </span>
-                      <span className={`badge ${riskBadgeClass}`} style={{ fontSize: '0.62rem' }}>
-                        {riskLabel}
-                      </span>
+                    {/* Credit & Financial Widget */}
+                    <div style={{
+                      background: 'var(--bg-subtle)',
+                      borderRadius: '10px',
+                      padding: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      border: '1px solid var(--border-color)'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Límite de Crédito:</span>
+                        <strong style={{ color: 'var(--text-primary)' }}>
+                          RD$ {limitAmt.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </strong>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Saldo Exigible:</span>
+                        <strong style={{ color: balance > 0 ? '#38bdf8' : 'var(--text-muted)' }}>
+                          RD$ {balance.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </strong>
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
+                          <span>Uso de crédito</span>
+                          <span style={{ fontWeight: 700, color: barColor }}>{usedPct}%</span>
+                        </div>
+                        <div style={{ width: '100%', height: '6px', background: 'var(--bg-subtle-2)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ width: `${usedPct}%`, height: '100%', background: barColor, borderRadius: '3px', transition: 'width 0.3s' }} />
+                        </div>
+                      </div>
+
+                      {/* Alerts / Status info */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '4px', fontSize: '0.72rem' }}>
+                        <span style={{ color: c.is_credit_blocked === 1 ? '#ef4444' : '#10b981', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                          {c.is_credit_blocked === 1 ? <><Lock size={12} /> Crédito Bloqueado</> : <><Unlock size={12} /> Crédito Habilitado</>}
+                        </span>
+                        {overdueCount > 0 && (
+                          <span style={{ color: '#ef4444', fontWeight: 700 }}>
+                            {overdueCount} fact. en mora
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px' }}>
+                      <button
+                        onClick={() => handleOpenStatement(c.id)}
+                        className="btn btn-secondary btn-sm"
+                        style={{ justifyContent: 'center', fontSize: '0.78rem', gap: '5px' }}
+                      >
+                        <FileText size={14} />
+                        <span>Estado</span>
+                      </button>
+                      <button
+                        onClick={() => handleOpenCustomer360(c.id)}
+                        className="btn btn-primary btn-sm"
+                        style={{ justifyContent: 'center', fontSize: '0.78rem', gap: '5px' }}
+                      >
+                        <Eye size={14} />
+                        <span>Ficha 360°</span>
+                      </button>
+                      <button
+                        onClick={() => handleToggleCustomerStatus(c.id)}
+                        className={`btn btn-sm ${isInactive ? 'btn-success' : 'btn-secondary'}`}
+                        style={{
+                          padding: '0 10px',
+                          height: '32px',
+                          color: isInactive ? '#ffffff' : '#ef4444',
+                          borderColor: isInactive ? 'transparent' : 'rgba(239, 68, 68, 0.3)'
+                        }}
+                        title={isInactive ? "Activar cliente" : "Desactivar cliente"}
+                      >
+                        <Power size={14} />
+                      </button>
                     </div>
                   </div>
-
-                  {/* Salesperson Assigned */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: '6px', fontSize: '0.75rem' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Vendedor:</span>
-                    <span style={{ fontWeight: 700, color: '#60a5fa' }}>{c.salesperson_name || 'Carlos Mendoza'}</span>
-                  </div>
-
-                  {/* Credit Utilization Bar (Section #38) */}
-                  <div style={{ background: 'var(--bg-card)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', marginBottom: '4px' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Utilización de Crédito</span>
-                      <span style={{ fontWeight: 800, color: barColor }}>{usedPct}% ({balance > 0 ? `RD$ ${balance.toLocaleString('es-DO')}` : 'Sin deuda'})</span>
-                    </div>
-
-                    <div style={{ width: '100%', height: '6px', background: 'var(--bg-subtle-2)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ width: `${usedPct}%`, height: '100%', background: barColor, borderRadius: '3px' }} />
-                    </div>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      <span>Disponible: RD$ {Number(c.credit_available || 0).toLocaleString('es-DO')}</span>
-                      <span>Límite: RD$ {limitAmt.toLocaleString('es-DO')}</span>
-                    </div>
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px' }}>
-                    <button
-                      onClick={() => handleOpenStatement(c.id)}
-                      className="btn btn-secondary btn-sm"
-                      style={{ justifyContent: 'center', fontSize: '0.78rem', gap: '5px' }}
-                    >
-                      <FileText size={14} />
-                      <span>Estado</span>
-                    </button>
-                    <button
-                      onClick={() => handleOpenCustomer360(c.id)}
-                      className="btn btn-primary btn-sm"
-                      style={{ justifyContent: 'center', fontSize: '0.78rem', gap: '5px' }}
-                    >
-                      <Eye size={14} />
-                      <span>Ficha 360°</span>
-                    </button>
-                    <button
-                      onClick={() => handleToggleCustomerStatus(c.id)}
-                      className={`btn btn-sm ${isInactive ? 'btn-success' : 'btn-secondary'}`}
-                      style={{
-                        padding: '0 10px',
-                        height: '32px',
-                        color: isInactive ? '#ffffff' : '#ef4444',
-                        borderColor: isInactive ? 'transparent' : 'rgba(239, 68, 68, 0.3)'
-                      }}
-                      title={isInactive ? "Activar cliente" : "Desactivar cliente"}
-                    >
-                      <Power size={14} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })
+                );
+              })
+            )}
+          </div>
+          {displayedCustomers.length > 0 && (
+            <Pagination
+              currentPage={custPage}
+              totalItems={displayedCustomers.length}
+              pageSize={custPageSize}
+              onPageChange={setCustPage}
+              onPageSizeChange={setCustPageSize}
+              pageSizeOptions={[12, 24, 48, 96]}
+              itemLabel="clientes"
+              disabled={loading}
+            />
           )}
-        </div>
+        </>
       )}
 
       {/* CUSTOMERS VIEW: TABLE */}
       {activeTab === 'customers' && viewMode === 'table' && (
-        <div className="table-container">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Cliente / Razón Social</th>
-                <th>RNC / Cédula</th>
-                <th>Vendedor Asignado</th>
-                <th>Ciudad</th>
-                <th>Límite Crédito</th>
-                <th>Saldo Pendiente</th>
-                <th>Estado Cuenta</th>
-                <th>Estado Crédito</th>
-                <th>Riesgo</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="10" style={{ textAlign: 'center', padding: '30px' }}>Cargando clientes...</td></tr>
-              ) : displayedCustomers.length === 0 ? (
-                <tr><td colSpan="10" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron clientes.</td></tr>
-              ) : (
-                displayedCustomers.map(c => {
-                  const isInactive = c.status === 'inactive';
-                  return (
-                    <tr key={c.id} style={{ opacity: isInactive ? 0.7 : 1 }}>
-                      <td>
-                        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.company_name || `${c.first_name} ${c.last_name}`}</div>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{c.code}</span>
-                      </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{c.tax_id || c.id_card || 'Consumidor Final'}</td>
-                      <td style={{ fontWeight: 600, color: '#60a5fa' }}>{c.salesperson_name || 'Carlos Mendoza'}</td>
-                      <td>{c.city || 'Santo Domingo'}</td>
-                      <td>RD$ {Number(c.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
-                      <td style={{ fontWeight: 800, color: Number(c.current_balance) > 0 ? '#38bdf8' : 'var(--text-muted)' }}>
-                        RD$ {Number(c.current_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td>
-                        {isInactive ? (
-                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                            <UserX size={12} /> Inactivo
+        <>
+          <div className="table-container">
+            <table className="custom-table">
+              <thead>
+                <tr>
+                  <th>Cliente / Razón Social</th>
+                  <th>RNC / Cédula</th>
+                  <th>Vendedor Asignado</th>
+                  <th>Ciudad</th>
+                  <th>Límite Crédito</th>
+                  <th>Saldo Pendiente</th>
+                  <th>Estado Cuenta</th>
+                  <th>Estado Crédito</th>
+                  <th>Riesgo</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '30px' }}>Cargando clientes...</td></tr>
+                ) : displayedCustomers.length === 0 ? (
+                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron clientes.</td></tr>
+                ) : (
+                  paginatedCustomers.map(c => {
+                    const isInactive = c.status === 'inactive';
+                    return (
+                      <tr key={c.id} style={{ opacity: isInactive ? 0.7 : 1 }}>
+                        <td>
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.company_name || `${c.first_name} ${c.last_name}`}</div>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{c.code}</span>
+                        </td>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{c.tax_id || c.id_card || 'Consumidor Final'}</td>
+                        <td style={{ fontWeight: 600, color: '#60a5fa' }}>{c.salesperson_name || 'Carlos Mendoza'}</td>
+                        <td>{c.city || 'Santo Domingo'}</td>
+                        <td>RD$ {Number(c.credit_limit || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
+                        <td style={{ fontWeight: 800, color: Number(c.current_balance) > 0 ? '#38bdf8' : 'var(--text-muted)' }}>
+                          RD$ {Number(c.current_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td>
+                          {isInactive ? (
+                            <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <UserX size={12} /> Inactivo
+                            </span>
+                          ) : (
+                            <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <UserCheck size={12} /> Activo
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {c.is_credit_blocked === 1 ? (
+                            <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <Lock size={12} /> Bloqueado
+                            </span>
+                          ) : (
+                            <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <ShieldCheck size={12} /> Activo
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`badge ${c.risk_score === 'critical' ? 'badge-danger' : c.risk_score === 'high' ? 'badge-warning' : 'badge-success'}`}>
+                            {c.risk_score === 'critical' ? 'Crítico' : c.risk_score === 'high' ? 'Alto' : 'Bajo'}
                           </span>
-                        ) : (
-                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                            <UserCheck size={12} /> Activo
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        {c.is_credit_blocked === 1 ? (
-                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                            <Lock size={12} /> Bloqueado
-                          </span>
-                        ) : (
-                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                            <ShieldCheck size={12} /> Activo
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        <span className={`badge ${c.risk_score === 'critical' ? 'badge-danger' : c.risk_score === 'high' ? 'badge-warning' : 'badge-success'}`}>
-                          {c.risk_score === 'critical' ? 'Crítico' : c.risk_score === 'high' ? 'Alto' : 'Bajo'}
-                        </span>
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', gap: '6px' }}>
-                          <button onClick={() => handleOpenStatement(c.id)} className="btn btn-secondary btn-sm" title="Ver Estado de Cuenta">
-                            <FileText size={14} />
-                            <span>Estado</span>
-                          </button>
-                          <button onClick={() => handleOpenCustomer360(c.id)} className="btn btn-primary btn-sm" title="Ver Ficha 360°">
-                            <Eye size={14} />
-                            <span>360°</span>
-                          </button>
-                          <button
-                            onClick={() => handleToggleCustomerStatus(c.id)}
-                            className={`btn btn-sm ${isInactive ? 'btn-success' : 'btn-secondary'}`}
-                            style={{
-                              padding: '0 8px',
-                              height: '30px',
-                              color: isInactive ? '#ffffff' : '#ef4444',
-                              borderColor: isInactive ? 'transparent' : 'rgba(239, 68, 68, 0.3)'
-                            }}
-                            title={isInactive ? "Activar cliente" : "Desactivar cliente"}
-                          >
-                            <Power size={13} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button onClick={() => handleOpenStatement(c.id)} className="btn btn-secondary btn-sm" title="Ver Estado de Cuenta">
+                              <FileText size={14} />
+                              <span>Estado</span>
+                            </button>
+                            <button onClick={() => handleOpenCustomer360(c.id)} className="btn btn-primary btn-sm" title="Ver Ficha 360°">
+                              <Eye size={14} />
+                              <span>360°</span>
+                            </button>
+                            <button
+                              onClick={() => handleToggleCustomerStatus(c.id)}
+                              className={`btn btn-sm ${isInactive ? 'btn-success' : 'btn-secondary'}`}
+                              style={{
+                                padding: '0 8px',
+                                height: '30px',
+                                color: isInactive ? '#ffffff' : '#ef4444',
+                                borderColor: isInactive ? 'transparent' : 'rgba(239, 68, 68, 0.3)'
+                              }}
+                              title={isInactive ? "Activar cliente" : "Desactivar cliente"}
+                            >
+                              <Power size={13} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+          {displayedCustomers.length > 0 && (
+            <Pagination
+              currentPage={custPage}
+              totalItems={displayedCustomers.length}
+              pageSize={custPageSize}
+              onPageChange={setCustPage}
+              onPageSizeChange={setCustPageSize}
+              pageSizeOptions={[12, 24, 48, 96]}
+              itemLabel="clientes"
+              disabled={loading}
+            />
+          )}
+        </>
       )}
 
       {/* CUSTOMER STATEMENT VIEW */}
@@ -1373,7 +1462,9 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                           );
                         }
 
-                        return invoicesToRender.map((inv, idx) => (
+                        const paginatedStmtInvoices = invoicesToRender.slice((stmtPage - 1) * stmtPageSize, stmtPage * stmtPageSize);
+
+                        return paginatedStmtInvoices.map((inv, idx) => (
                           <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
                             <td style={{ padding: '5px 4px', color: '#111827', whiteSpace: 'nowrap' }}>
                               {formatStatementDate(inv.registro || inv.raw_registro)}
@@ -1403,6 +1494,25 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                     </tbody>
                   </table>
                 </div>
+
+                {(() => {
+                  const invoicesToRender = statementInvoiceStatus === 'pending'
+                    ? (statementData.open_invoices || [])
+                    : (statementData.invoices || statementData.open_invoices || []);
+                  if (invoicesToRender.length <= stmtPageSize) return null;
+                  return (
+                    <div className="no-print" style={{ marginBottom: '16px' }}>
+                      <Pagination
+                        currentPage={stmtPage}
+                        totalItems={invoicesToRender.length}
+                        pageSize={stmtPageSize}
+                        onPageChange={setStmtPage}
+                        onPageSizeChange={setStmtPageSize}
+                        itemLabel="facturas"
+                      />
+                    </div>
+                  );
+                })()}
 
                 {/* 4. Total Footer */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '14px', borderTop: '2px solid #111827' }}>
@@ -1793,7 +1903,7 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
                 </tr>
               </thead>
               <tbody>
-                {customers.map(c => {
+                {customers.slice((riskPage - 1) * riskPageSize, riskPage * riskPageSize).map(c => {
                   const limit = Number(c.credit_limit || 0);
                   const balance = Number(c.current_balance || 0);
                   const usedPct = limit > 0 ? Math.min(100, Math.round((balance / limit) * 100)) : 0;
@@ -1867,60 +1977,83 @@ export default function ThirdPartiesPage({ initialMode = 'customers', onNavigate
               </tbody>
             </table>
           </div>
+          {customers.length > 0 && (
+            <Pagination
+              currentPage={riskPage}
+              totalItems={customers.length}
+              pageSize={riskPageSize}
+              onPageChange={setRiskPage}
+              onPageSizeChange={setRiskPageSize}
+              itemLabel="clientes"
+            />
+          )}
         </div>
       )}
 
       {/* SUPPLIERS TABLE */}
       {activeTab === 'suppliers' && (
-        <div className="table-container">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Razón Social / Comercial</th>
-                <th>RNC</th>
-                <th>Contacto</th>
-                <th>Teléfono / Correo</th>
-                <th>Compras Registradas</th>
-                <th>Saldo Pendiente</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px' }}>Cargando proveedores...</td></tr>
-              ) : suppliers.length === 0 ? (
-                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron proveedores.</td></tr>
-              ) : (
-                suppliers.map(s => (
-                  <tr key={s.id}>
-                    <td>
-                      <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{s.company_name}</div>
-                      {s.trade_name && <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{s.trade_name}</span>}
-                    </td>
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>{s.tax_id}</td>
-                    <td>{s.contact_person || '-'}</td>
-                    <td>
-                      <div style={{ fontSize: '0.8rem' }}>{s.phone}</div>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{s.email}</span>
-                    </td>
-                    <td>
-                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: Number(s.purchase_count) > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                        {Number(s.purchase_count) || 0}
-                      </div>
-                      {Number(s.total_purchased) > 0 && (
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                          RD$ {Number(s.total_purchased).toLocaleString('es-DO', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ fontWeight: 800, color: Number(s.pending_balance) > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>
-                      RD$ {Number(s.pending_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="table-container">
+            <table className="custom-table">
+              <thead>
+                <tr>
+                  <th>Razón Social / Comercial</th>
+                  <th>RNC</th>
+                  <th>Contacto</th>
+                  <th>Teléfono / Correo</th>
+                  <th>Compras Registradas</th>
+                  <th>Saldo Pendiente</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px' }}>Cargando proveedores...</td></tr>
+                ) : suppliers.length === 0 ? (
+                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron proveedores.</td></tr>
+                ) : (
+                  paginatedSuppliers.map(s => (
+                    <tr key={s.id}>
+                      <td>
+                        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{s.company_name}</div>
+                        {s.trade_name && <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{s.trade_name}</span>}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>{s.tax_id}</td>
+                      <td>{s.contact_person || '-'}</td>
+                      <td>
+                        <div style={{ fontSize: '0.8rem' }}>{s.phone}</div>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{s.email}</span>
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 700, fontSize: '0.95rem', color: Number(s.purchase_count) > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                          {Number(s.purchase_count) || 0}
+                        </div>
+                        {Number(s.total_purchased) > 0 && (
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                            RD$ {Number(s.total_purchased).toLocaleString('es-DO', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ fontWeight: 800, color: Number(s.pending_balance) > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>
+                        RD$ {Number(s.pending_balance || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {suppliers.length > 0 && (
+            <Pagination
+              currentPage={suppPage}
+              totalItems={suppliers.length}
+              pageSize={suppPageSize}
+              onPageChange={setSuppPage}
+              onPageSizeChange={setSuppPageSize}
+              itemLabel="proveedores"
+              disabled={loading}
+            />
+          )}
+        </>
       )}
 
       {/* SECTION #40: CUSTOMER 360° MODAL (REDESIGNED EXECUTIVE UI) */}

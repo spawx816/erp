@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
   const { addToast } = useToast();
@@ -31,6 +32,12 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
   const [cxcSalespersonFilter, setCxcSalespersonFilter] = useState('');
   const [cxcPage, setCxcPage] = useState(1);
   const [cxcPageSize, setCxcPageSize] = useState(15);
+
+  // CxP Filters and Pagination
+  const [cxpSearch, setCxpSearch] = useState('');
+  const [cxpStatusFilter, setCxpStatusFilter] = useState('all'); // 'all' | 'current' | 'overdue'
+  const [cxpPage, setCxpPage] = useState(1);
+  const [cxpPageSize, setCxpPageSize] = useState(15);
 
   // Expenses Filters and Pagination
   const [expenseSearch, setExpenseSearch] = useState('');
@@ -457,6 +464,33 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
     }
     return pages;
   }, [cxcPage, totalCxcPages]);
+
+  const filteredPayables = useMemo(() => {
+    return payables.filter(p => {
+      if (cxpSearch) {
+        const q = cxpSearch.toLowerCase().trim();
+        const match = (
+          (p.document_number || p.invoice_number || '').toLowerCase().includes(q) ||
+          (p.supplier_name || '').toLowerCase().includes(q) ||
+          (p.supplier_tax_id || '').toLowerCase().includes(q) ||
+          (p.purchase_order_number || '').toLowerCase().includes(q)
+        );
+        if (!match) return false;
+      }
+      if (cxpStatusFilter === 'overdue') {
+        return p.status === 'overdue' || Number(p.days_overdue || 0) > 0;
+      }
+      if (cxpStatusFilter === 'current') {
+        return p.status !== 'overdue' && Number(p.days_overdue || 0) <= 0;
+      }
+      return true;
+    });
+  }, [payables, cxpSearch, cxpStatusFilter]);
+
+  const paginatedPayables = useMemo(() => {
+    const start = (cxpPage - 1) * cxpPageSize;
+    return filteredPayables.slice(start, start + cxpPageSize);
+  }, [filteredPayables, cxpPage, cxpPageSize]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
@@ -1091,6 +1125,38 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
             </div>
           </div>
 
+          {/* CxP Filter Toolbar */}
+          <div className="card" style={{ padding: '14px 18px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
+              <Search size={15} style={{ position: 'absolute', left: '12px', top: '11px', color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                className="input-control"
+                placeholder="Buscar factura prov., suplidor, RNC, OC..."
+                value={cxpSearch}
+                onChange={(e) => {
+                  setCxpSearch(e.target.value);
+                  setCxpPage(1);
+                }}
+                style={{ paddingLeft: '36px', height: '36px' }}
+              />
+            </div>
+
+            <select
+              className="select-control"
+              value={cxpStatusFilter}
+              onChange={(e) => {
+                setCxpStatusFilter(e.target.value);
+                setCxpPage(1);
+              }}
+              style={{ width: '190px', height: '36px', fontSize: '0.82rem' }}
+            >
+              <option value="all">Todas las Facturas</option>
+              <option value="current">🟢 Solo Al Día</option>
+              <option value="overdue">🔴 Solo Vencidas (Mora)</option>
+            </select>
+          </div>
+
           <div className="table-container">
             <table className="custom-table">
               <thead>
@@ -1108,10 +1174,10 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
               <tbody>
                 {loading ? (
                   <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px' }}>Cargando cuentas por pagar...</td></tr>
-                ) : payables.length === 0 ? (
-                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay facturas de compras pendientes.</td></tr>
+                ) : filteredPayables.length === 0 ? (
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron facturas de compras pendientes.</td></tr>
                 ) : (
-                  payables.map(p => {
+                  paginatedPayables.map(p => {
                     const isOverdue = p.status === 'overdue' || Number(p.days_overdue || 0) > 0;
                     return (
                       <tr key={p.id}>
@@ -1164,6 +1230,18 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
               </tbody>
             </table>
           </div>
+
+          {filteredPayables.length > 0 && (
+            <Pagination
+              currentPage={cxpPage}
+              totalItems={filteredPayables.length}
+              pageSize={cxpPageSize}
+              onPageChange={setCxpPage}
+              onPageSizeChange={setCxpPageSize}
+              itemLabel="facturas por pagar"
+              disabled={loading}
+            />
+          )}
         </div>
       )}
 

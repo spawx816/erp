@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ClipboardList, CheckCircle2, XCircle, PackageCheck,
@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function OrdersPage({ user, activeBranch, onNavigate }) {
   const { addToast } = useToast();
@@ -22,6 +23,8 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
   const [summary, setSummary] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [rejectionModal, setRejectionModal] = useState({ open: false, orderId: null, orderNumber: '', reason: '' });
@@ -37,8 +40,14 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
   const [processingId, setProcessingId] = useState(null);
 
   useEffect(() => {
+    setPage(1);
     loadOrders();
   }, [activeTab, search, activeBranch]);
+
+  const paginatedOrders = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return orders.slice(start, start + pageSize);
+  }, [orders, page, pageSize]);
 
   const loadOrders = async () => {
     setLoading(true);
@@ -473,7 +482,7 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
                   </td>
                 </tr>
               ) : (
-                orders.map(order => (
+                paginatedOrders.map(order => (
                   <tr key={order.id}>
                     <td>
                       <span style={{ fontWeight: 800, color: '#38bdf8', letterSpacing: '0.5px' }}>
@@ -490,7 +499,7 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
                     <td>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                         {order.payment_type === 'credit' ? (
-                          <span className="badge" style={{ background: 'rgba(2, 132, 199, 0.15)', color: '#38bdf8', border: '1px solid rgba(2, 132, 199, 0.3)', width: 'fit-content' }}>
+                           <span className="badge" style={{ background: 'rgba(2, 132, 199, 0.15)', color: '#38bdf8', border: '1px solid rgba(2, 132, 199, 0.3)', width: 'fit-content' }}>
                             💳 Crédito {order.credit_days ? `(${order.credit_days}d)` : ''}
                           </span>
                         ) : (
@@ -584,6 +593,19 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
             </tbody>
           </table>
         </div>
+
+        {/* Orders Pagination */}
+        {orders.length > 0 && (
+          <Pagination
+            currentPage={page}
+            totalItems={orders.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            itemLabel="pedidos"
+            disabled={loading}
+          />
+        )}
       </div>
 
       {/* DETAIL MODAL */}

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ShieldCheck, Users, Lock, Key, Plus, Search,
   History, CheckCircle, AlertCircle, X
 } from 'lucide-react';
 import api from '../services/api';
+import Pagination from '../components/Pagination';
 
 export default function SecurityPage({ activeBranch, initialTab = 'users' }) {
   const [activeTab, setActiveTab] = useState(initialTab); // 'users' | 'roles' | 'audit'
@@ -19,6 +20,12 @@ export default function SecurityPage({ activeBranch, initialTab = 'users' }) {
   const [auditLogs, setAuditLogs] = useState([]);
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Pagination states
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersPageSize, setUsersPageSize] = useState(15);
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditPageSize, setAuditPageSize] = useState(15);
 
   // New User Modal
   const [showUserModal, setShowUserModal] = useState(false);
@@ -82,6 +89,16 @@ export default function SecurityPage({ activeBranch, initialTab = 'users' }) {
       alert(err.message || 'Error creando usuario.');
     }
   };
+
+  const paginatedUsers = useMemo(() => {
+    const start = (usersPage - 1) * usersPageSize;
+    return usersList.slice(start, start + usersPageSize);
+  }, [usersList, usersPage, usersPageSize]);
+
+  const paginatedAuditLogs = useMemo(() => {
+    const start = (auditPage - 1) * auditPageSize;
+    return auditLogs.slice(start, start + auditPageSize);
+  }, [auditLogs, auditPage, auditPageSize]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -156,31 +173,43 @@ export default function SecurityPage({ activeBranch, initialTab = 'users' }) {
               </tr>
             </thead>
             <tbody>
-              {usersList.map(u => (
-                <tr key={u.id}>
-                  <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#60a5fa' }}>{u.username}</td>
-                  <td>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{u.first_name} {u.last_name}</div>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{u.job_title || 'Colaborador'}</span>
-                  </td>
-                  <td>
-                    <span className="badge badge-info">{u.role_name}</span>
-                  </td>
-                  <td>{u.branch_name || 'Todas'}</td>
-                  <td style={{ fontWeight: 700, color: '#f59e0b' }}>{u.max_discount_percentage}%</td>
-                  <td>
-                    <div style={{ fontSize: '0.8rem' }}>{u.email}</div>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{u.phone || '-'}</span>
-                  </td>
-                  <td>
-                    <span className={`badge ${u.status === 'active' ? 'badge-success' : 'badge-danger'}`}>
-                      {u.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {usersList.length === 0 ? (
+                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay usuarios registrados.</td></tr>
+              ) : (
+                paginatedUsers.map(u => (
+                  <tr key={u.id}>
+                    <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#60a5fa' }}>{u.username}</td>
+                    <td>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{u.first_name} {u.last_name}</div>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{u.job_title || 'Colaborador'}</span>
+                    </td>
+                    <td>
+                      <span className="badge badge-info">{u.role_name}</span>
+                    </td>
+                    <td>{u.branch_name || 'Todas'}</td>
+                    <td style={{ fontWeight: 700, color: '#f59e0b' }}>{u.max_discount_percentage}%</td>
+                    <td>
+                      <div style={{ fontSize: '0.8rem' }}>{u.email}</div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{u.phone || '-'}</span>
+                    </td>
+                    <td>
+                      <span className={`badge ${u.status === 'active' ? 'badge-success' : 'badge-danger'}`}>
+                        {u.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={usersPage}
+            totalItems={usersList.length}
+            pageSize={usersPageSize}
+            onPageChange={setUsersPage}
+            onPageSizeChange={(s) => { setUsersPageSize(s); setUsersPage(1); }}
+            itemLabel="usuarios"
+          />
         </div>
       )}
 
@@ -220,28 +249,40 @@ export default function SecurityPage({ activeBranch, initialTab = 'users' }) {
               </tr>
             </thead>
             <tbody>
-              {auditLogs.map(log => (
-                <tr key={log.id}>
-                  <td style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
-                    {new Date(log.created_at).toLocaleString('es-DO')}
-                  </td>
-                  <td>
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{log.username || 'Sistema'}</span>
-                  </td>
-                  <td>
-                    <span className="badge badge-info">{log.module}</span>
-                  </td>
-                  <td>
-                    <span className="badge badge-warning">{log.action}</span>
-                  </td>
-                  <td style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                    {log.description}
-                  </td>
-                  <td style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>{log.ip_address}</td>
-                </tr>
-              ))}
+              {auditLogs.length === 0 ? (
+                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay registros de auditoría.</td></tr>
+              ) : (
+                paginatedAuditLogs.map(log => (
+                  <tr key={log.id}>
+                    <td style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                      {new Date(log.created_at).toLocaleString('es-DO')}
+                    </td>
+                    <td>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{log.username || 'Sistema'}</span>
+                    </td>
+                    <td>
+                      <span className="badge badge-info">{log.module}</span>
+                    </td>
+                    <td>
+                      <span className="badge badge-warning">{log.action}</span>
+                    </td>
+                    <td style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                      {log.description}
+                    </td>
+                    <td style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>{log.ip_address}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={auditPage}
+            totalItems={auditLogs.length}
+            pageSize={auditPageSize}
+            onPageChange={setAuditPage}
+            onPageSizeChange={(s) => { setAuditPageSize(s); setAuditPage(1); }}
+            itemLabel="registros"
+          />
         </div>
       )}
 

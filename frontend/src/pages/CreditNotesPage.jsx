@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   FileX, Search, Eye, X, Ban,
   Building2, User, Clock,
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const fmt = (n) => `RD$ ${Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}`;
@@ -200,6 +201,8 @@ export default function CreditNotesPage({ activeBranch }) {
   const [search, setSearch] = useState('');
   const [filterAction, setFilterAction] = useState('');
   const [filterReturnType, setFilterReturnType] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [selectedNote, setSelectedNote] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
@@ -211,7 +214,13 @@ export default function CreditNotesPage({ activeBranch }) {
     .filter(n => n.action_taken === 'store_credit')
     .reduce((s, n) => s + Number(n.total || 0), 0);
 
+  const paginatedNotes = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return notes.slice(start, start + pageSize);
+  }, [notes, page, pageSize]);
+
   useEffect(() => {
+    setPage(1);
     loadNotes();
 
     const handleExternalUpdate = () => {
@@ -366,7 +375,7 @@ export default function CreditNotesPage({ activeBranch }) {
                 </td>
               </tr>
             ) : (
-              notes.map(nc => {
+              paginatedNotes.map(nc => {
                 const action = ACTION_LABELS[nc.action_taken] || { label: nc.action_taken, color: '#94a3b8' };
                 const retType = RETURN_LABELS[nc.return_type] || { label: nc.return_type, color: '#94a3b8' };
                 const ActionIcon = action.icon || FileX;
@@ -434,6 +443,18 @@ export default function CreditNotesPage({ activeBranch }) {
           </tbody>
         </table>
       </div>
+
+      {notes.length > 0 && (
+        <Pagination
+          currentPage={page}
+          totalItems={notes.length}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="notas de crédito"
+          disabled={loading}
+        />
+      )}
 
       {/* Detail Modal */}
       {selectedNote && (

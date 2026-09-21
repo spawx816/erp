@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   UserCheck, Percent, Plus, Search, Eye, CheckCircle2,
   DollarSign, Target, TrendingUp, FileText, Printer,
@@ -8,11 +8,20 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
   const { addToast } = useToast();
   const isVendedor = user?.role_slug === 'vendedor';
   const [activeTab, setActiveTab] = useState(isVendedor ? 'commissions' : initialTab); // 'salespeople' | 'commissions'
+
+  // Pagination states
+  const [spPage, setSpPage] = useState(1);
+  const [spPageSize, setSpPageSize] = useState(12);
+  const [monthlyPage, setMonthlyPage] = useState(1);
+  const [monthlyPageSize, setMonthlyPageSize] = useState(15);
+  const [commPage, setCommPage] = useState(1);
+  const [commPageSize, setCommPageSize] = useState(15);
 
   // Month navigation state
   const getCurrentMonthStr = () => {
@@ -274,30 +283,51 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
   };
 
   // Filtered salespeople
-  const filteredSalespeople = salespeople.filter(sp => {
-    return !search ||
-      sp.name.toLowerCase().includes(search.toLowerCase()) ||
-      sp.code.toLowerCase().includes(search.toLowerCase()) ||
-      (sp.zone && sp.zone.toLowerCase().includes(search.toLowerCase()));
-  });
+  const filteredSalespeople = useMemo(() => {
+    return salespeople.filter(sp => {
+      return !search ||
+        sp.name.toLowerCase().includes(search.toLowerCase()) ||
+        sp.code.toLowerCase().includes(search.toLowerCase()) ||
+        (sp.zone && sp.zone.toLowerCase().includes(search.toLowerCase()));
+    });
+  }, [salespeople, search]);
+
+  const paginatedSalespeople = useMemo(() => {
+    const start = (spPage - 1) * spPageSize;
+    return filteredSalespeople.slice(start, start + spPageSize);
+  }, [filteredSalespeople, spPage, spPageSize]);
 
   // Filtered monthly summary list
-  const filteredMonthlyList = (monthlySummary?.data || []).filter(sp => {
-    return !search ||
-      sp.name.toLowerCase().includes(search.toLowerCase()) ||
-      sp.code.toLowerCase().includes(search.toLowerCase()) ||
-      (sp.zone && sp.zone.toLowerCase().includes(search.toLowerCase()));
-  });
+  const filteredMonthlyList = useMemo(() => {
+    return (monthlySummary?.data || []).filter(sp => {
+      return !search ||
+        sp.name.toLowerCase().includes(search.toLowerCase()) ||
+        sp.code.toLowerCase().includes(search.toLowerCase()) ||
+        (sp.zone && sp.zone.toLowerCase().includes(search.toLowerCase()));
+    });
+  }, [monthlySummary?.data, search]);
+
+  const paginatedMonthlyList = useMemo(() => {
+    const start = (monthlyPage - 1) * monthlyPageSize;
+    return filteredMonthlyList.slice(start, start + monthlyPageSize);
+  }, [filteredMonthlyList, monthlyPage, monthlyPageSize]);
 
   // Filtered legacy commissions
-  const filteredCommissions = commissions.filter(c => {
-    const matchSp = filterSpId === 'ALL' || c.salesperson_id === parseInt(filterSpId, 10);
-    const matchStatus = filterCommStatus === 'ALL' || c.status === filterCommStatus;
-    const matchSearch = !search ||
-      c.salesperson_name.toLowerCase().includes(search.toLowerCase()) ||
-      (c.sale_number && c.sale_number.toLowerCase().includes(search.toLowerCase()));
-    return matchSp && matchStatus && matchSearch;
-  });
+  const filteredCommissions = useMemo(() => {
+    return commissions.filter(c => {
+      const matchSp = filterSpId === 'ALL' || c.salesperson_id === parseInt(filterSpId, 10);
+      const matchStatus = filterCommStatus === 'ALL' || c.status === filterCommStatus;
+      const matchSearch = !search ||
+        c.salesperson_name.toLowerCase().includes(search.toLowerCase()) ||
+        (c.sale_number && c.sale_number.toLowerCase().includes(search.toLowerCase()));
+      return matchSp && matchStatus && matchSearch;
+    });
+  }, [commissions, filterSpId, filterCommStatus, search]);
+
+  const paginatedCommissions = useMemo(() => {
+    const start = (commPage - 1) * commPageSize;
+    return filteredCommissions.slice(start, start + commPageSize);
+  }, [filteredCommissions, commPage, commPageSize]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
@@ -398,7 +428,7 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '18px' }}>
-              {filteredSalespeople.map(sp => {
+              {paginatedSalespeople.map(sp => {
                 const goal = Number(sp.monthly_goal || 0);
                 const collectionsMonth = Number(sp.collections_month || 0);
                 const compliance = goal > 0 ? (collectionsMonth / goal) * 100 : 0;
@@ -508,6 +538,14 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
               })}
             </div>
           )}
+          <Pagination
+            currentPage={spPage}
+            totalItems={filteredSalespeople.length}
+            pageSize={spPageSize}
+            onPageChange={setSpPage}
+            onPageSizeChange={(s) => { setSpPageSize(s); setSpPage(1); }}
+            itemLabel="vendedores"
+          />
         </div>
       )}
 
@@ -713,7 +751,7 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
                         </td>
                       </tr>
                     ) : (
-                      filteredMonthlyList.map(sp => {
+                      paginatedMonthlyList.map(sp => {
                         const qualifies = sp.qualifies;
                         const isPaid = sp.is_paid;
                         const compliance = sp.compliance_percentage;
@@ -854,6 +892,14 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
                     )}
                   </tbody>
                 </table>
+                <Pagination
+                  currentPage={monthlyPage}
+                  totalItems={filteredMonthlyList.length}
+                  pageSize={monthlyPageSize}
+                  onPageChange={setMonthlyPage}
+                  onPageSizeChange={(s) => { setMonthlyPageSize(s); setMonthlyPage(1); }}
+                  itemLabel="vendedores"
+                />
               </div>
             </>
           ) : (
@@ -933,7 +979,7 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
                         </td>
                       </tr>
                     ) : (
-                      filteredCommissions.map(c => {
+                      paginatedCommissions.map(c => {
                         const isPending = c.status === 'pending';
                         const isSelected = selectedCommissions.includes(c.id);
 
@@ -977,6 +1023,14 @@ export default function SalespeoplePage({ user, initialTab = 'salespeople' }) {
                     )}
                   </tbody>
                 </table>
+                <Pagination
+                  currentPage={commPage}
+                  totalItems={filteredCommissions.length}
+                  pageSize={commPageSize}
+                  onPageChange={setCommPage}
+                  onPageSizeChange={(s) => { setCommPageSize(s); setCommPage(1); }}
+                  itemLabel="transacciones"
+                />
               </div>
             </div>
           )}

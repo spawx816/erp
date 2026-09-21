@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function ProductsPage({ user }) {
   const { addToast } = useToast();
@@ -21,6 +22,7 @@ export default function ProductsPage({ user }) {
   const [filterStatus, setFilterStatus] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
   const [pagination, setPagination] = useState({});
   const searchTimerRef = useRef(null);
 
@@ -62,7 +64,7 @@ export default function ProductsPage({ user }) {
 
   useEffect(() => {
     loadProducts();
-  }, [page, search, filterCategory, filterBrand, filterType, filterStatus]);
+  }, [page, limit, search, filterCategory, filterBrand, filterType, filterStatus]);
 
   useEffect(() => {
     loadMetadata();
@@ -88,7 +90,7 @@ export default function ProductsPage({ user }) {
   const loadProducts = async () => {
     setLoading(true);
     try {
-      const params = { page, limit: 20 };
+      const params = { page, limit };
       if (search)         params.search      = search;
       if (filterCategory) params.category_id = filterCategory;
       if (filterBrand)    params.brand_id    = filterBrand;
@@ -410,44 +412,15 @@ export default function ProductsPage({ user }) {
       </div>
 
       {/* Pagination */}
-      {pagination.pages > 1 && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 4px' }}>
-          <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Mostrando {((pagination.page - 1) * pagination.limit) + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} de {pagination.total} productos
-          </span>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              disabled={pagination.page <= 1}
-              onClick={() => setPage(p => p - 1)}
-            >
-              <ChevronLeft size={15} />
-              <span>Anterior</span>
-            </button>
-            {Array.from({ length: pagination.pages }, (_, i) => i + 1)
-              .filter(n => Math.abs(n - pagination.page) <= 2)
-              .map(n => (
-                <button
-                  key={n}
-                  className={`btn btn-sm ${n === pagination.page ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setPage(n)}
-                  style={{ minWidth: '34px' }}
-                >
-                  {n}
-                </button>
-              ))
-            }
-            <button
-              className="btn btn-secondary btn-sm"
-              disabled={pagination.page >= pagination.pages}
-              onClick={() => setPage(p => p + 1)}
-            >
-              <span>Siguiente</span>
-              <ChevronRight size={15} />
-            </button>
-          </div>
-        </div>
-      )}
+      <Pagination
+        currentPage={page}
+        totalItems={pagination.total || products.length}
+        pageSize={limit}
+        onPageChange={setPage}
+        onPageSizeChange={(newLimit) => { setLimit(newLimit); setPage(1); }}
+        pageSizeOptions={[10, 20, 50, 100]}
+        itemLabel="productos"
+      />
 
       {/* CREATE / EDIT PRODUCT MODAL */}
       {showModal && (

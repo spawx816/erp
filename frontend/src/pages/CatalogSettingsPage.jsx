@@ -1,15 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Tag, Layers, Ruler, Plus, Edit2, Trash2, X, Check, AlertCircle
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 // ─── Generic small list manager ─────────────────────────────────────────────
 function ListManager({ title, icon: Icon, items, onAdd, onEdit, onDelete, fields, canManage }) {
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({});
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const defaultForm = fields.reduce((acc, f) => ({ ...acc, [f.key]: '' }), {});
 
@@ -36,6 +39,11 @@ function ListManager({ title, icon: Icon, items, onAdd, onEdit, onDelete, fields
     setFormData(defaultForm);
     setEditingItem(null);
   };
+
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, page, pageSize]);
 
   return (
     <div className="card" style={{ padding: '20px' }}>
@@ -101,7 +109,7 @@ function ListManager({ title, icon: Icon, items, onAdd, onEdit, onDelete, fields
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          {items.map(item => (
+          {paginatedItems.map(item => (
             <div key={item.id} style={{
               display: 'flex',
               alignItems: 'center',
@@ -134,6 +142,15 @@ function ListManager({ title, icon: Icon, items, onAdd, onEdit, onDelete, fields
               )}
             </div>
           ))}
+          <Pagination
+            currentPage={page}
+            totalItems={items.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(s) => { setPageSize(s); setPage(1); }}
+            pageSizeOptions={[5, 10, 20]}
+            itemLabel="elementos"
+          />
         </div>
       )}
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ShoppingBag, Plus, Search, X, RefreshCw,
   CheckCircle2, Warehouse, Truck, Package, FileText,
@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function PurchasesPage({ activeBranch }) {
   const { addToast } = useToast();
@@ -29,6 +30,12 @@ export default function PurchasesPage({ activeBranch }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState('all'); // 'all' | 'pending' | 'approved' | 'received' | 'cancelled'
   const [lastRefresh, setLastRefresh] = useState(null);
+
+  // Pagination states
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [ordersPageSize, setOrdersPageSize] = useState(10);
+  const [purchasesPage, setPurchasesPage] = useState(1);
+  const [purchasesPageSize, setPurchasesPageSize] = useState(10);
 
   // New / Edit Purchase Order Modal
   const [showOrderModal, setShowOrderModal] = useState(false);
@@ -480,28 +487,50 @@ export default function PurchasesPage({ activeBranch }) {
   };
 
   // -------------------------------------------------------------
-  // FILTERING LOGIC
+  // FILTERING & PAGINATION LOGIC
   // -------------------------------------------------------------
-  const filteredPurchases = purchases.filter(p => {
-    if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
-    return (
-      p.purchase_number?.toLowerCase().includes(term) ||
-      p.supplier_name?.toLowerCase().includes(term) ||
-      p.supplier_invoice_number?.toLowerCase().includes(term)
-    );
-  });
+  useEffect(() => {
+    setOrdersPage(1);
+  }, [searchTerm, orderStatusFilter]);
 
-  const filteredOrders = purchaseOrders.filter(po => {
-    if (orderStatusFilter !== 'all' && po.status !== orderStatusFilter) return false;
-    if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
-    return (
-      po.order_number?.toLowerCase().includes(term) ||
-      po.supplier_name?.toLowerCase().includes(term) ||
-      po.warehouse_name?.toLowerCase().includes(term)
-    );
-  });
+  useEffect(() => {
+    setPurchasesPage(1);
+  }, [searchTerm]);
+
+  const filteredPurchases = useMemo(() => {
+    return purchases.filter(p => {
+      if (!searchTerm) return true;
+      const term = searchTerm.toLowerCase();
+      return (
+        p.purchase_number?.toLowerCase().includes(term) ||
+        p.supplier_name?.toLowerCase().includes(term) ||
+        p.supplier_invoice_number?.toLowerCase().includes(term)
+      );
+    });
+  }, [purchases, searchTerm]);
+
+  const filteredOrders = useMemo(() => {
+    return purchaseOrders.filter(po => {
+      if (orderStatusFilter !== 'all' && po.status !== orderStatusFilter) return false;
+      if (!searchTerm) return true;
+      const term = searchTerm.toLowerCase();
+      return (
+        po.order_number?.toLowerCase().includes(term) ||
+        po.supplier_name?.toLowerCase().includes(term) ||
+        po.warehouse_name?.toLowerCase().includes(term)
+      );
+    });
+  }, [purchaseOrders, orderStatusFilter, searchTerm]);
+
+  const paginatedOrders = useMemo(() => {
+    const start = (ordersPage - 1) * ordersPageSize;
+    return filteredOrders.slice(start, start + ordersPageSize);
+  }, [filteredOrders, ordersPage, ordersPageSize]);
+
+  const paginatedPurchases = useMemo(() => {
+    const start = (purchasesPage - 1) * purchasesPageSize;
+    return filteredPurchases.slice(start, start + purchasesPageSize);
+  }, [filteredPurchases, purchasesPage, purchasesPageSize]);
 
   const pendingOrdersCount = purchaseOrders.filter(po => po.status === 'pending').length;
 
@@ -694,7 +723,7 @@ export default function PurchasesPage({ activeBranch }) {
                   </td>
                 </tr>
               ) : (
-                filteredOrders.map(po => {
+                paginatedOrders.map(po => {
                   const isPending = po.status === 'pending';
                   const isApproved = po.status === 'approved';
                   const isPartiallyReceived = po.status === 'partially_received';
@@ -849,6 +878,17 @@ export default function PurchasesPage({ activeBranch }) {
               )}
             </tbody>
           </table>
+          {filteredOrders.length > 0 && (
+            <Pagination
+              currentPage={ordersPage}
+              totalItems={filteredOrders.length}
+              pageSize={ordersPageSize}
+              onPageChange={setOrdersPage}
+              onPageSizeChange={setOrdersPageSize}
+              itemLabel="órdenes"
+              disabled={loading}
+            />
+          )}
         </div>
       )}
 
@@ -876,7 +916,7 @@ export default function PurchasesPage({ activeBranch }) {
               ) : filteredPurchases.length === 0 ? (
                 <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No se encontraron registros de compra.</td></tr>
               ) : (
-                filteredPurchases.map(p => (
+                paginatedPurchases.map(p => (
                   <tr key={p.id}>
                     <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#60a5fa' }}>{p.purchase_number}</td>
                     <td style={{ fontSize: '0.78rem' }}>{new Date(p.created_at).toLocaleDateString('es-DO')}</td>
@@ -910,6 +950,17 @@ export default function PurchasesPage({ activeBranch }) {
               )}
             </tbody>
           </table>
+          {filteredPurchases.length > 0 && (
+            <Pagination
+              currentPage={purchasesPage}
+              totalItems={filteredPurchases.length}
+              pageSize={purchasesPageSize}
+              onPageChange={setPurchasesPage}
+              onPageSizeChange={setPurchasesPageSize}
+              itemLabel="compras"
+              disabled={loading}
+            />
+          )}
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Calculator, Calendar, CheckCircle2, TrendingUp,
   ArrowUpRight, ArrowDownRight, DollarSign, Lock,
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function MonthlyClosingPage() {
   const { addToast } = useToast();
@@ -17,6 +18,10 @@ export default function MonthlyClosingPage() {
   const [loading, setLoading] = useState(true);
   const [closingOfficial, setClosingOfficial] = useState(false);
   const [notes, setNotes] = useState('');
+
+  // Pagination for saved closings history
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(10);
 
   const monthsList = [
     { num: 1, name: 'Enero' },
@@ -97,6 +102,12 @@ export default function MonthlyClosingPage() {
   const netMarginPercent = pnl.net_sales > 0
     ? ((pnl.net_profit / pnl.net_sales) * 100).toFixed(1)
     : 0;
+
+  const paginatedClosings = useMemo(() => {
+    const list = closingData?.saved_closings || [];
+    const start = (historyPage - 1) * historyPageSize;
+    return list.slice(start, start + historyPageSize);
+  }, [closingData?.saved_closings, historyPage, historyPageSize]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
@@ -404,7 +415,7 @@ export default function MonthlyClosingPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {closingData.saved_closings.map(sc => (
+                    {paginatedClosings.map(sc => (
                       <tr key={sc.id}>
                         <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
                           {monthsList.find(m => m.num === sc.month)?.name} {sc.year}
@@ -425,6 +436,14 @@ export default function MonthlyClosingPage() {
                     ))}
                   </tbody>
                 </table>
+                <Pagination
+                  currentPage={historyPage}
+                  totalItems={closingData.saved_closings.length}
+                  pageSize={historyPageSize}
+                  onPageChange={setHistoryPage}
+                  onPageSizeChange={(s) => { setHistoryPageSize(s); setHistoryPage(1); }}
+                  itemLabel="cierres"
+                />
               </div>
             </div>
           )}

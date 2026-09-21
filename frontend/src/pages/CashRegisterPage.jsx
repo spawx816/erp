@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Wallet, DollarSign, ArrowDownLeft, ArrowUpRight,
   Lock, Unlock, AlertCircle, History, CheckCircle, X, ArrowRightLeft
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../context/ToastContext';
+import Pagination from '../components/Pagination';
 
 export default function CashRegisterPage({ user, activeBranch, activeSession, onRefreshUser }) {
   const toast = useToast();
@@ -12,6 +13,10 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
   const [sessionHistory, setSessionHistory] = useState([]);
   const [sessionDetail, setSessionDetail] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Pagination for history
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Modals
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -136,6 +141,11 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
       toast.error(err.message);
     }
   };
+
+  const paginatedSessions = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sessionHistory.slice(start, start + pageSize);
+  }, [sessionHistory, page, pageSize]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -263,7 +273,7 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
               {sessionHistory.length === 0 ? (
                 <tr><td colSpan="9" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No hay cierres registrados.</td></tr>
               ) : (
-                sessionHistory.map(s => (
+                paginatedSessions.map(s => (
                   <tr key={s.id}>
                     <td>{s.register_name}</td>
                     <td>{s.cashier_name}</td>
@@ -285,6 +295,14 @@ export default function CashRegisterPage({ user, activeBranch, activeSession, on
               )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={page}
+            totalItems={sessionHistory.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(s) => { setPageSize(s); setPage(1); }}
+            itemLabel="sesiones"
+          />
         </div>
       </div>
 
