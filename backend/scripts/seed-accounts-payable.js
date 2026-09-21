@@ -98,9 +98,9 @@ async function seedAccountsPayable() {
     ];
 
     for (const inv of sampleInvoices) {
-      // Find or create purchase record for reference
+      // Find purchase record for reference if exists
       let purch = await db.prepare("SELECT id FROM purchases WHERE supplier_id = ? AND company_id = 1 LIMIT 1").get(inv.supplier_id);
-      const purchId = purch ? purch.id : 1;
+      const purchId = purch ? purch.id : null;
 
       await db.prepare(`
         INSERT INTO accounts_payable (
