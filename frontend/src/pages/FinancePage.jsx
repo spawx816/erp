@@ -98,43 +98,48 @@ export default function FinancePage({ activeBranch, initialTab = 'cxc' }) {
     try {
       if (activeTab === 'cxc') {
         const res = await api.get('/finance/receivables');
-        if (res.success) setReceivables(res.data);
+        if (res && res.success) setReceivables(Array.isArray(res.data) ? res.data : []);
       } else if (activeTab === 'aging') {
         const res = await api.get('/finance/receivables/aging-table');
-        if (res.success) setAgingData(res.data);
+        if (res && res.success) setAgingData(res.data || null);
       } else if (activeTab === 'cxp') {
         const res = await api.get('/finance/payables');
-        if (res.success) setPayables(res.data);
+        if (res && res.success) setPayables(Array.isArray(res.data) ? res.data : []);
       } else if (activeTab === 'expenses') {
         await loadExpenses();
         const catRes = await api.get('/finance/expense-categories');
-        if (catRes.success) setExpenseCategories(catRes.data);
+        if (catRes && catRes.success) setExpenseCategories(Array.isArray(catRes.data) ? catRes.data : []);
       }
 
       const custRes = await api.get('/third-parties/customers');
-      if (custRes.success) setCustomers(custRes.data);
+      if (custRes && custRes.success) setCustomers(Array.isArray(custRes.data) ? custRes.data : []);
     } catch (err) {
-      console.error(err);
-      addToast('Error al cargar datos financieros.', 'error');
+      console.error('Error in Finance loadData:', err);
+      addToast(err.message || 'Error al cargar datos financieros.', 'error');
     } finally {
       setLoading(false);
     }
   };
 
   const loadExpenses = async () => {
-    const params = {
-      page: expensePage,
-      limit: expensePageSize,
-      search: expenseSearch || undefined,
-      category_id: expenseCategoryFilter || undefined,
-      start_date: expenseDateFrom || undefined,
-      end_date: expenseDateTo || undefined,
-      status: expenseStatusFilter !== 'all' ? expenseStatusFilter : undefined
-    };
+    try {
+      const params = {
+        page: expensePage,
+        limit: expensePageSize,
+        search: expenseSearch || undefined,
+        category_id: expenseCategoryFilter || undefined,
+        start_date: expenseDateFrom || undefined,
+        end_date: expenseDateTo || undefined,
+        status: expenseStatusFilter !== 'all' ? expenseStatusFilter : undefined
+      };
 
-    const res = await api.get('/finance/expenses', params);
-    if (res.success) {
-      setExpenses(res.data);
+      const res = await api.get('/finance/expenses', params);
+      if (res && res.success) {
+        setExpenses(Array.isArray(res.data) ? res.data : []);
+      }
+    } catch (err) {
+      console.error('Error in loadExpenses:', err);
+      setExpenses([]);
     }
   };
 
