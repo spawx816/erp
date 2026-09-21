@@ -257,9 +257,25 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
         )}
       </div>
 
-      {/* KPI Cards */}
+      {/* KPI Cards (Interactive Filters) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-        <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid #f59e0b' }}>
+        <div
+          className="card"
+          onClick={() => setActiveTab(activeTab === 'pending' ? 'all' : 'pending')}
+          style={{
+            padding: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            borderLeft: '4px solid #f59e0b',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            background: activeTab === 'pending' ? 'rgba(245, 158, 11, 0.12)' : undefined,
+            borderColor: activeTab === 'pending' ? '#f59e0b' : undefined,
+            boxShadow: activeTab === 'pending' ? '0 0 0 1px #f59e0b' : undefined
+          }}
+          title="Click para filtrar pedidos Por Autorizar"
+        >
           <div style={{ background: 'rgba(245, 158, 11, 0.15)', padding: '10px', borderRadius: '10px', color: '#f59e0b' }}>
             <Clock size={22} />
           </div>
@@ -269,7 +285,23 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
           </div>
         </div>
 
-        <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid #06b6d4' }}>
+        <div
+          className="card"
+          onClick={() => setActiveTab(activeTab === 'approved' ? 'all' : 'approved')}
+          style={{
+            padding: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            borderLeft: '4px solid #06b6d4',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            background: activeTab === 'approved' ? 'rgba(6, 182, 212, 0.12)' : undefined,
+            borderColor: activeTab === 'approved' ? '#06b6d4' : undefined,
+            boxShadow: activeTab === 'approved' ? '0 0 0 1px #06b6d4' : undefined
+          }}
+          title="Click para filtrar pedidos Autorizados para Almacén"
+        >
           <div style={{ background: 'rgba(6, 182, 212, 0.15)', padding: '10px', borderRadius: '10px', color: '#06b6d4' }}>
             <CheckCircle2 size={22} />
           </div>
@@ -279,7 +311,23 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
           </div>
         </div>
 
-        <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid #3b82f6' }}>
+        <div
+          className="card"
+          onClick={() => setActiveTab(activeTab === 'dispatched' ? 'all' : 'dispatched')}
+          style={{
+            padding: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            borderLeft: '4px solid #3b82f6',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            background: activeTab === 'dispatched' ? 'rgba(59, 130, 246, 0.12)' : undefined,
+            borderColor: activeTab === 'dispatched' ? '#3b82f6' : undefined,
+            boxShadow: activeTab === 'dispatched' ? '0 0 0 1px #3b82f6' : undefined
+          }}
+          title="Click para filtrar pedidos Despachados"
+        >
           <div style={{ background: 'rgba(59, 130, 246, 0.15)', padding: '10px', borderRadius: '10px', color: '#3b82f6' }}>
             <PackageCheck size={22} />
           </div>
@@ -289,7 +337,23 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
           </div>
         </div>
 
-        <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid #10b981' }}>
+        <div
+          className="card"
+          onClick={() => setActiveTab(activeTab === 'invoiced' ? 'all' : 'invoiced')}
+          style={{
+            padding: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            borderLeft: '4px solid #10b981',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            background: activeTab === 'invoiced' ? 'rgba(16, 185, 129, 0.12)' : undefined,
+            borderColor: activeTab === 'invoiced' ? '#10b981' : undefined,
+            boxShadow: activeTab === 'invoiced' ? '0 0 0 1px #10b981' : undefined
+          }}
+          title="Click para filtrar pedidos Facturados"
+        >
           <div style={{ background: 'rgba(16, 185, 129, 0.15)', padding: '10px', borderRadius: '10px', color: '#10b981' }}>
             <DollarSign size={22} />
           </div>
@@ -304,25 +368,28 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
       <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
           {/* Tabs */}
-          <div style={{ display: 'flex', gap: '6px', background: 'rgba(255, 255, 255, 0.04)', padding: '4px', borderRadius: '10px' }}>
-            {isManager && (
-              <button
-                onClick={() => setActiveTab('pending')}
-                className={`btn btn-sm ${activeTab === 'pending' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700 }}
-              >
-                Por Autorizar ({summary.pendingCount || 0})
-              </button>
-            )}
-            {isWarehouse && (
-              <button
-                onClick={() => setActiveTab('approved')}
-                className={`btn btn-sm ${activeTab === 'approved' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700 }}
-              >
-                Listos para Despacho ({summary.approvedCount || 0})
-              </button>
-            )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', background: 'rgba(255, 255, 255, 0.04)', padding: '4px', borderRadius: '10px' }}>
+            <button
+              onClick={() => setActiveTab('all')}
+              className={`btn btn-sm ${activeTab === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700 }}
+            >
+              Todos los Pedidos ({summary.totalCount || 0})
+            </button>
+            <button
+              onClick={() => setActiveTab('pending')}
+              className={`btn btn-sm ${activeTab === 'pending' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700 }}
+            >
+              Por Autorizar ({summary.pendingCount || 0})
+            </button>
+            <button
+              onClick={() => setActiveTab('approved')}
+              className={`btn btn-sm ${activeTab === 'approved' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700 }}
+            >
+              Autorizados (Almacén) ({summary.approvedCount || 0})
+            </button>
             <button
               onClick={() => setActiveTab('dispatched')}
               className={`btn btn-sm ${activeTab === 'dispatched' ? 'btn-primary' : 'btn-secondary'}`}
@@ -331,12 +398,21 @@ export default function OrdersPage({ user, activeBranch, onNavigate }) {
               Despachados ({summary.dispatchedCount || 0})
             </button>
             <button
-              onClick={() => setActiveTab('all')}
-              className={`btn btn-sm ${activeTab === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setActiveTab('invoiced')}
+              className={`btn btn-sm ${activeTab === 'invoiced' ? 'btn-primary' : 'btn-secondary'}`}
               style={{ borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700 }}
             >
-              Todos los Pedidos ({summary.totalCount || 0})
+              Facturados ({summary.invoicedCount || 0})
             </button>
+            {(summary.rejectedCount || 0) > 0 && (
+              <button
+                onClick={() => setActiveTab('rejected')}
+                className={`btn btn-sm ${activeTab === 'rejected' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700 }}
+              >
+                Rechazados ({summary.rejectedCount || 0})
+              </button>
+            )}
           </div>
 
           {/* Search bar & Refresh */}

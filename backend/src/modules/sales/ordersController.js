@@ -14,38 +14,44 @@ const ordersController = {
       const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
       const offset = (parsedPage - 1) * parsedLimit;
 
-      let whereClauses = ['so.company_id = ?'];
-      let params = [companyId];
+      let summaryWhereClauses = ['so.company_id = ?'];
+      let summaryParams = [companyId];
 
       // If user is a salesperson and not an admin/manager, they only see their own orders
       if (req.user.role_slug === 'vendedor') {
-        whereClauses.push('(so.user_id = ? OR so.salesperson_id IN (SELECT id FROM salespeople WHERE email = ? OR code = ?))');
-        params.push(req.user.id, req.user.email, req.user.username);
+        summaryWhereClauses.push('(so.user_id = ? OR so.salesperson_id IN (SELECT id FROM salespeople WHERE email = ? OR code = ?))');
+        summaryParams.push(req.user.id, req.user.email, req.user.username);
       } else if (salesperson_id) {
-        whereClauses.push('so.salesperson_id = ?');
-        params.push(salesperson_id);
+        summaryWhereClauses.push('so.salesperson_id = ?');
+        summaryParams.push(salesperson_id);
       }
 
       if (branch_id) {
-        whereClauses.push('so.branch_id = ?');
-        params.push(branch_id);
+        summaryWhereClauses.push('so.branch_id = ?');
+        summaryParams.push(branch_id);
       }
       if (customer_id) {
-        whereClauses.push('so.customer_id = ?');
-        params.push(customer_id);
+        summaryWhereClauses.push('so.customer_id = ?');
+        summaryParams.push(customer_id);
       }
+      if (search) {
+        summaryWhereClauses.push('(so.order_number LIKE ? OR c.company_name LIKE ? OR c.first_name LIKE ? OR c.tax_id LIKE ?)');
+        summaryParams.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      }
+
+      const summaryWhereSQL = summaryWhereClauses.join(' AND ');
+
+      let whereClauses = [...summaryWhereClauses];
+      let params = [...summaryParams];
+
       if (status && status !== 'all') {
         whereClauses.push('so.status = ?');
         params.push(status);
       }
-      if (search) {
-        whereClauses.push('(so.order_number LIKE ? OR c.company_name LIKE ? OR c.first_name LIKE ? OR c.tax_id LIKE ?)');
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
-      }
 
       const whereSQL = whereClauses.join(' AND ');
 
-      // Summary KPIs
+      // Summary KPIs (calculated globally for company/branch/search context)
       const summaryRow = await db.prepare(`
         SELECT
           COUNT(*) as total_count,
@@ -57,8 +63,8 @@ const ordersController = {
           COALESCE(SUM(CASE WHEN so.status NOT IN ('rejected', 'cancelled') THEN so.total ELSE 0 END), 0) as active_total_amount
         FROM sales_orders so
         JOIN customers c ON so.customer_id = c.id
-        WHERE ${whereSQL}
-      `).get(...params);
+        WHERE ${summaryWhereSQL}
+      `).get(...summaryParams);
 
       const orders = await db.prepare(`
         SELECT
