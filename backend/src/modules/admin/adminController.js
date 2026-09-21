@@ -100,6 +100,17 @@ const adminController = {
         }
       }
 
+      const formatAlertDate = (d) => {
+        if (!d) return '';
+        try {
+          const dt = new Date(d);
+          if (isNaN(dt.getTime())) return String(d).slice(0, 10);
+          return dt.toISOString().slice(0, 10);
+        } catch {
+          return String(d).slice(0, 10);
+        }
+      };
+
       // 2. Facturas CxC Vencidas
       const overdueSales = await db.prepare(`
         SELECT s.id, s.invoice_number, s.sale_number, s.ncf, s.balance, s.due_date, c.company_name as customer_name
@@ -118,13 +129,14 @@ const adminController = {
         `).get(companyId, title);
 
         if (!existing) {
+          const formattedDate = formatAlertDate(sale.due_date);
           await db.prepare(`
             INSERT INTO notifications (company_id, type, title, message, priority, is_read, link, reference_type, reference_id, created_at)
             VALUES (?, 'overdue_invoice', ?, ?, 'urgent', 0, '/finance', 'sale', ?, CURRENT_TIMESTAMP)
           `).run(
             companyId,
             title,
-            `Saldo pendiente de RD$ ${Number(sale.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })} vencido desde ${sale.due_date}.`,
+            `Saldo pendiente de RD$ ${Number(sale.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })} vencido desde ${formattedDate}.`,
             sale.id
           );
         }
@@ -147,14 +159,15 @@ const adminController = {
         `).get(companyId, title);
 
         if (!existing) {
-          const isOverdue = rec.status === 'overdue';
+          const isOverdue = rec.status === 'overdue' || (rec.next_due_date && new Date(rec.next_due_date) < new Date());
+          const formattedDate = formatAlertDate(rec.next_due_date);
           await db.prepare(`
             INSERT INTO notifications (company_id, type, title, message, priority, is_read, link, reference_type, reference_id, created_at)
             VALUES (?, 'recurring_expense', ?, ?, ?, 0, '/finance', 'recurring_expense', ?, CURRENT_TIMESTAMP)
           `).run(
             companyId,
             title,
-            `Obligación de RD$ ${Number(rec.estimated_amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })} ${isOverdue ? 'vencida' : 'próxima a vencer'} (${rec.next_due_date}).`,
+            `Obligación de RD$ ${Number(rec.estimated_amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })} ${isOverdue ? 'vencida' : 'próxima a vencer'} (${formattedDate}).`,
             isOverdue ? 'urgent' : 'high',
             rec.id
           );
