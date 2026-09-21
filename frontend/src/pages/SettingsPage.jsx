@@ -89,13 +89,33 @@ export default function SettingsPage() {
     }
   };
 
+  const [downloadingId, setDownloadingId] = useState(null);
+
+  const handleDownloadBackup = async (b) => {
+    setDownloadingId(b.id);
+    try {
+      await api.download(`/admin/backups/${b.id}/download`, b.filename);
+    } catch (err) {
+      alert(err.message || 'Error al descargar la copia de seguridad.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const handleCreateBackup = async () => {
     setCreatingBackup(true);
     try {
       const res = await api.post('/admin/backups');
       if (res.success) {
-        alert(`Respaldo creado: ${res.backup.filename}`);
-        loadBackups();
+        await loadBackups();
+        // Automatically trigger browser download of the newly created backup
+        if (res.backup && res.backup.filename) {
+          const createdItem = (await api.get('/admin/backups')).data?.find(item => item.filename === res.backup.filename);
+          if (createdItem) {
+            await handleDownloadBackup(createdItem);
+          }
+        }
+        alert(`Respaldo generado exitosamente: ${res.backup.filename}. La descarga hacia su equipo ha comenzado.`);
       }
     } catch (err) {
       alert(err.message || 'Error creando respaldo.');
@@ -435,7 +455,7 @@ export default function SettingsPage() {
             Respaldos completos de la base de datos relacional con todos los datos transaccionales, auditoría y secuencias NCF.
           </p>
 
-          <div className="table-container" style={{ maxHeight: '180px' }}>
+          <div className="table-container" style={{ maxHeight: '220px' }}>
             <table className="custom-table">
               <thead>
                 <tr>
@@ -443,11 +463,12 @@ export default function SettingsPage() {
                   <th>Fecha</th>
                   <th>Tamaño</th>
                   <th>Estado</th>
+                  <th style={{ textAlign: 'right' }}>Acción</th>
                 </tr>
               </thead>
               <tbody>
                 {backups.length === 0 ? (
-                  <tr><td colSpan="4" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>No hay respaldos registrados.</td></tr>
+                  <tr><td colSpan="5" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>No hay respaldos registrados.</td></tr>
                 ) : (
                   backups.map(b => (
                     <tr key={b.id}>
@@ -455,6 +476,26 @@ export default function SettingsPage() {
                       <td style={{ fontSize: '0.75rem' }}>{new Date(b.created_at).toLocaleString('es-DO')}</td>
                       <td>{(b.size_bytes / 1024).toFixed(1)} KB</td>
                       <td><span className="badge badge-success">Completado</span></td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          onClick={() => handleDownloadBackup(b)}
+                          disabled={downloadingId === b.id}
+                          className="btn btn-outline btn-sm"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '4px 10px',
+                            fontSize: '0.72rem',
+                            borderRadius: '6px',
+                            cursor: 'pointer'
+                          }}
+                          title="Descargar copia de seguridad a su computadora"
+                        >
+                          <Download size={13} />
+                          <span>{downloadingId === b.id ? 'Descargando...' : 'Descargar PC'}</span>
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -463,10 +504,13 @@ export default function SettingsPage() {
           </div>
 
           <div style={{ marginTop: '16px', padding: '12px 14px', background: 'var(--bg-subtle)', borderRadius: '10px', border: '1px solid var(--border-color)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-            <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>Procedimiento de Restauración:</p>
-            <p>1. Detenga el servicio de backend.</p>
-            <p>2. Copie el archivo deseado desde <code>data/backups/</code> a <code>data/sgc_erp.sqlite</code>.</p>
-            <p>3. Reinicie el servidor de backend. Todos los datos quedarán restaurados a ese punto en el tiempo.</p>
+            <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>Procedimiento de Descarga y Restauración (PostgreSQL):</p>
+            <p>1. Haga clic en <strong>"Descargar PC"</strong> para guardar el archivo <code>.sql</code> de respaldo directamente en su equipo local.</p>
+            <p>2. Para restaurar el respaldo en su base de datos PostgreSQL, ejecute en la consola del servidor:</p>
+            <div style={{ background: 'var(--bg-surface)', padding: '6px 10px', borderRadius: '6px', margin: '6px 0', fontFamily: 'var(--font-mono)', fontSize: '0.72rem', border: '1px solid var(--border-color)', color: 'var(--accent-primary)' }}>
+              psql -U educrm_user -d nexus_erp -f nombre_archivo.sql
+            </div>
+            <p>3. Todos los registros, secuencias NCF, auditoría e inventarios quedarán sincronizados al punto exacto del respaldo.</p>
           </div>
         </div>
       </div>

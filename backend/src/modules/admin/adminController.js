@@ -860,6 +860,52 @@ const adminController = {
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
+  },
+
+  downloadBackup: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { id } = req.params;
+
+      const backup = await db.prepare('SELECT * FROM backups WHERE id = ? AND company_id = ?').get(id, companyId);
+      if (!backup) {
+        return res.status(404).json({ success: false, message: 'Respaldo no encontrado o no autorizado.' });
+      }
+
+      const backupDir = path.resolve(__dirname, '../../../../backups');
+      let targetFilePath = path.resolve(backup.file_path);
+
+      // Check direct path or fallback in backupDir
+      if (!fs.existsSync(targetFilePath)) {
+        targetFilePath = path.resolve(backupDir, backup.filename);
+      }
+
+      // Also check local backend/data/backups/ fallback if any
+      if (!fs.existsSync(targetFilePath)) {
+        targetFilePath = path.resolve(__dirname, '../../data/backups', backup.filename);
+      }
+
+      if (!fs.existsSync(targetFilePath)) {
+        return res.status(404).json({ success: false, message: 'El archivo de respaldo no se encuentra en el almacenamiento del servidor.' });
+      }
+
+      const safeFilename = path.basename(backup.filename);
+
+      logAudit({
+        companyId,
+        userId: req.user.id,
+        ipAddress: req.ip,
+        module: 'system',
+        action: 'backup_downloaded',
+        description: `Copia de seguridad descargada al equipo local: ${safeFilename}`
+      });
+
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      return res.download(targetFilePath, safeFilename);
+    } catch (err) {
+      return res.status(500).json({ success: false, message: 'Error al descargar el respaldo.', error: err.message });
+    }
   }
 };
 

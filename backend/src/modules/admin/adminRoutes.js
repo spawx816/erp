@@ -36,5 +36,6 @@ router.post('/warehouses', requirePermission('settings.manage'), adminController
 router.get('/audit-logs', requirePermission('audit.view'), adminController.getAuditLogs);
 router.get('/backups', requirePermission('settings.manage'), adminController.getBackups);
 router.post('/backups', requirePermission('settings.manage'), adminController.createBackup);
+router.get('/backups/:id/download', requirePermission('settings.manage'), adminController.downloadBackup);
 
 module.exports = router;

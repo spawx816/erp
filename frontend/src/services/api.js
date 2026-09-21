@@ -135,7 +135,48 @@ export const api = {
     ...options
   }),
 
-  delete: (endpoint, options = {}) => request(endpoint, { method: 'DELETE', ...options })
+  delete: (endpoint, options = {}) => request(endpoint, { method: 'DELETE', ...options }),
+
+  download: async (endpoint, defaultFilename = 'download.sql') => {
+    const token = localStorage.getItem('sgc_token');
+    const activeBranchId = localStorage.getItem('sgc_branch_id');
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      method: 'GET',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...(activeBranchId && activeBranchId !== 'undefined' && activeBranchId !== 'null' ? { 'x-branch-id': activeBranchId } : {})
+      }
+    });
+
+    if (!response.ok) {
+      let msg = 'Error al descargar archivo.';
+      try {
+        const errData = await response.json();
+        msg = errData.message || msg;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition');
+    let filename = defaultFilename;
+    if (disposition && disposition.indexOf('filename=') !== -1) {
+      const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+      if (matches != null && matches[1]) {
+        filename = matches[1].replace(/['"]/g, '');
+      }
+    }
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    return { success: true, filename };
+  }
 };
 
 export default api;
