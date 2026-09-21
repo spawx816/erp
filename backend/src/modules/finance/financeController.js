@@ -23,18 +23,32 @@ const financeController = {
         whereClauses.push("ar.status != 'paid'");
       }
 
-      const receivables = await db.prepare(`
-        SELECT ar.*,
-               COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
-               c.phone as customer_phone, c.tax_id as customer_tax_id,
-               b.name as branch_name,
-               COALESCE((CURRENT_DATE - ar.due_date), 0) as days_overdue
-        FROM accounts_receivable ar
-        JOIN customers c ON ar.customer_id = c.id
-        JOIN branches b ON ar.branch_id = b.id
-        WHERE ${whereClauses.join(' AND ')}
-        ORDER BY ar.due_date ASC
-      `).all(...params);
+      let receivables = [];
+      try {
+        receivables = await db.prepare(`
+          SELECT ar.*,
+                 COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
+                 c.phone as customer_phone, c.tax_id as customer_tax_id,
+                 COALESCE(b.name, 'Principal') as branch_name,
+                 COALESCE((CURRENT_DATE - (ar.due_date)::date), 0) as days_overdue
+          FROM accounts_receivable ar
+          JOIN customers c ON ar.customer_id = c.id
+          LEFT JOIN branches b ON ar.branch_id = b.id
+          WHERE ${whereClauses.join(' AND ')}
+          ORDER BY ar.due_date ASC
+        `).all(...params);
+      } catch (qErr) {
+        receivables = await db.prepare(`
+          SELECT ar.*,
+                 COALESCE(c.company_name, c.first_name || ' ' || COALESCE(c.last_name, '')) as customer_name,
+                 c.phone as customer_phone, c.tax_id as customer_tax_id,
+                 COALESCE((CURRENT_DATE - (ar.due_date)::date), 0) as days_overdue
+          FROM accounts_receivable ar
+          JOIN customers c ON ar.customer_id = c.id
+          WHERE ${whereClauses.join(' AND ')}
+          ORDER BY ar.due_date ASC
+        `).all(...params);
+      }
 
       // Filter by aging bracket if requested
       const filtered = receivables.filter(r => {
@@ -295,27 +309,42 @@ const financeController = {
         whereClauses.push("ap.status != 'paid'");
       }
 
-      const payables = await db.prepare(`
-        SELECT ap.*,
-               s.company_name as supplier_name, s.phone as supplier_phone, s.tax_id as supplier_tax_id,
-               b.name as branch_name,
-               COALESCE((CURRENT_DATE - ap.due_date), 0) as days_overdue,
-               COALESCE(po.order_number, po2.order_number) as purchase_order_number
-        FROM accounts_payable ap
-        JOIN suppliers s ON ap.supplier_id = s.id
-        JOIN branches b ON ap.branch_id = b.id
-        LEFT JOIN purchase_orders po ON ap.purchase_order_id = po.id
-        LEFT JOIN purchases p ON ap.purchase_id = p.id
-        LEFT JOIN purchase_orders po2 ON p.purchase_order_id = po2.id
-        WHERE ${whereClauses.join(' AND ')}
-        ORDER BY ap.due_date ASC
-      `).all(...params);
+      let payables = [];
+      try {
+        payables = await db.prepare(`
+          SELECT ap.*,
+                 s.company_name as supplier_name, s.phone as supplier_phone, s.tax_id as supplier_tax_id,
+                 COALESCE(b.name, 'Principal') as branch_name,
+                 COALESCE((CURRENT_DATE - (ap.due_date)::date), 0) as days_overdue,
+                 COALESCE(po.order_number, po2.order_number, ap.document_number) as purchase_order_number
+          FROM accounts_payable ap
+          JOIN suppliers s ON ap.supplier_id = s.id
+          LEFT JOIN branches b ON ap.branch_id = b.id
+          LEFT JOIN purchase_orders po ON ap.purchase_order_id = po.id
+          LEFT JOIN purchases p ON ap.purchase_id = p.id
+          LEFT JOIN purchase_orders po2 ON p.purchase_order_id = po2.id
+          WHERE ${whereClauses.join(' AND ')}
+          ORDER BY ap.due_date ASC
+        `).all(...params);
+      } catch (innerErr) {
+        payables = await db.prepare(`
+          SELECT ap.*,
+                 s.company_name as supplier_name, s.phone as supplier_phone, s.tax_id as supplier_tax_id,
+                 COALESCE((CURRENT_DATE - (ap.due_date)::date), 0) as days_overdue,
+                 ap.document_number as purchase_order_number
+          FROM accounts_payable ap
+          JOIN suppliers s ON ap.supplier_id = s.id
+          WHERE ${whereClauses.join(' AND ')}
+          ORDER BY ap.due_date ASC
+        `).all(...params);
+      }
 
       let totalPayable = 0;
-      payables.forEach(p => { totalPayable += Number(p.balance); });
+      payables.forEach(p => { totalPayable += Number(p.balance || 0); });
 
       return res.json({ success: true, summary: { total_payable: totalPayable }, data: payables });
     } catch (err) {
+      console.error('Error in getPayables:', err);
       return res.status(500).json({ success: false, message: 'Error consultando CxP.', error: err.message });
     }
   },

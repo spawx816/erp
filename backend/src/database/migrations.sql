@@ -7,7 +7,12 @@ BEGIN;
 
 -- 1. Añadir columnas faltantes requeridas por controladores
 ALTER TABLE accounts_receivable ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE accounts_receivable ADD COLUMN IF NOT EXISTS branch_id INTEGER REFERENCES branches(id);
 ALTER TABLE accounts_payable ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE accounts_payable ADD COLUMN IF NOT EXISTS branch_id INTEGER REFERENCES branches(id);
+ALTER TABLE accounts_payable ADD COLUMN IF NOT EXISTS purchase_id INTEGER REFERENCES purchases(id);
+ALTER TABLE accounts_payable ADD COLUMN IF NOT EXISTS purchase_order_id INTEGER REFERENCES purchase_orders(id);
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS purchase_order_id INTEGER REFERENCES purchase_orders(id);
 ALTER TABLE discount_authorizations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE salespeople ADD COLUMN IF NOT EXISTS commission_calculation_type TEXT DEFAULT 'invoiced';
