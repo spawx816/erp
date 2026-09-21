@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Search, MapPin, Wallet, Bell, CheckCircle2, AlertTriangle,
   AlertOctagon, Clock, User, Package, Receipt, Truck,
-  ChevronRight, X, Building2, ChevronDown, Check, Sun, Moon
+  ChevronRight, X, Building2, ChevronDown, Check, Sun, Moon,
+  CheckCheck, Trash2, Inbox, RotateCw, ExternalLink
 } from 'lucide-react';
 import api from '../services/api';
 import RncLookupModal from './RncLookupModal';
@@ -35,6 +36,8 @@ export default function Header({
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [notifTab, setNotifTab] = useState('all'); // 'all' | 'unread'
+  const [loadingNotifs, setLoadingNotifs] = useState(false);
   const notifRef = useRef(null);
 
   useEffect(() => {
@@ -45,6 +48,7 @@ export default function Header({
 
   const loadNotifications = async () => {
     try {
+      setLoadingNotifs(true);
       const res = await api.get('/admin/notifications');
       if (res.success) {
         setNotifications(res.data || []);
@@ -52,6 +56,8 @@ export default function Header({
       }
     } catch (err) {
       console.error('Failed to load notifications:', err);
+    } finally {
+      setLoadingNotifs(false);
     }
   };
 
@@ -62,6 +68,69 @@ export default function Header({
       setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (err) {}
   };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await api.post('/admin/notifications/read-all');
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
+      setUnreadCount(0);
+    } catch (err) {
+      console.error('Error marking all read:', err);
+    }
+  };
+
+  const handleClearRead = async () => {
+    try {
+      await api.delete('/admin/notifications/clear-read');
+      setNotifications(prev => prev.filter(n => !n.is_read));
+    } catch (err) {
+      console.error('Error clearing read:', err);
+    }
+  };
+
+  const handleDeleteNotification = async (id, e) => {
+    e.stopPropagation();
+    try {
+      await api.delete(`/admin/notifications/${id}`);
+      setNotifications(prev => prev.filter(n => n.id !== id));
+      setUnreadCount(prev => {
+        const notif = notifications.find(n => n.id === id);
+        return notif && !notif.is_read ? Math.max(0, prev - 1) : prev;
+      });
+    } catch (err) {
+      console.error('Error deleting notification:', err);
+    }
+  };
+
+  const handleNotificationClick = (n) => {
+    if (!n.is_read) {
+      handleMarkAsRead(n.id);
+    }
+    setShowNotifications(false);
+
+    if (typeof onNavigate === 'function') {
+      if (n.link?.includes('/inventory') || n.type === 'stock_low') {
+        onNavigate('inventory');
+      } else if (n.link?.includes('/finance') || n.type === 'overdue_invoice' || n.type === 'recurring_expense') {
+        onNavigate('finance');
+      } else if (n.link?.includes('/customers') || n.type === 'credit_exceeded') {
+        onNavigate('customers');
+      } else if (n.link?.includes('/sales') || n.type === 'sale') {
+        onNavigate('sales');
+      } else if (n.link?.includes('/security') || n.link?.includes('/authorizations') || n.type === 'authorization') {
+        onNavigate('security');
+      } else if (n.link?.includes('/purchases')) {
+        onNavigate('purchases');
+      }
+    }
+  };
+
+  const filteredNotifications = useMemo(() => {
+    if (notifTab === 'unread') {
+      return notifications.filter(n => !n.is_read);
+    }
+    return notifications;
+  }, [notifications, notifTab]);
 
   useEffect(() => {
     if (!searchTerm || searchTerm.trim().length < 2) {
@@ -478,57 +547,237 @@ export default function Header({
               position: 'absolute',
               top: '46px',
               right: 0,
-              width: '360px',
+              width: '400px',
               background: 'var(--bg-card)',
               border: '1px solid var(--border-color)',
-              borderRadius: '12px',
+              borderRadius: '14px',
               boxShadow: 'var(--shadow-dropdown)',
-              maxHeight: '450px',
-              overflowY: 'auto',
-              padding: '12px 0',
-              zIndex: 50
+              maxHeight: '520px',
+              display: 'flex',
+              flexDirection: 'column',
+              zIndex: 50,
+              overflow: 'hidden'
             }}>
-              <div style={{ padding: '0 16px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>Centro de Notificaciones</span>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{unreadCount} pendientes</span>
+              {/* Header */}
+              <div style={{
+                padding: '14px 16px',
+                borderBottom: '1px solid var(--border-color)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                background: isLight ? '#f8fafc' : 'rgba(255,255,255,0.02)'
+              }}>
+                <div>
+                  <h4 style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+                    Centro de Notificaciones
+                  </h4>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    {unreadCount > 0 ? `${unreadCount} pendientes de atención` : 'Todo al día'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <button
+                    onClick={loadNotifications}
+                    disabled={loadingNotifs}
+                    className="btn btn-secondary btn-sm"
+                    title="Actualizar notificaciones"
+                    style={{ padding: '5px 7px', height: '28px' }}
+                  >
+                    <RotateCw size={13} className={loadingNotifs ? 'animate-spin' : ''} />
+                  </button>
+
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={handleMarkAllAsRead}
+                      className="btn btn-secondary btn-sm"
+                      title="Marcar todas como leídas"
+                      style={{ padding: '5px 8px', height: '28px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <CheckCheck size={13} color="#10b981" />
+                      <span>Leídas</span>
+                    </button>
+                  )}
+
+                  {notifications.some(n => n.is_read) && (
+                    <button
+                      onClick={handleClearRead}
+                      className="btn btn-secondary btn-sm"
+                      title="Limpiar notificaciones leídas"
+                      style={{ padding: '5px 8px', height: '28px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Trash2 size={13} color="var(--text-muted)" />
+                      <span>Limpiar</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {notifications.length === 0 ? (
-                  <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.84rem' }}>
-                    No hay notificaciones pendientes.
+              {/* Sub-tabs: Todas / No leídas */}
+              <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: isLight ? '#f1f5f9' : 'rgba(0,0,0,0.15)', padding: '4px 8px', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => setNotifTab('all')}
+                  style={{
+                    flex: 1,
+                    padding: '5px 8px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: notifTab === 'all' ? 'var(--bg-card)' : 'transparent',
+                    color: notifTab === 'all' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                    fontWeight: notifTab === 'all' ? 700 : 500,
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  Todas ({notifications.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNotifTab('unread')}
+                  style={{
+                    flex: 1,
+                    padding: '5px 8px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: notifTab === 'unread' ? 'var(--bg-card)' : 'transparent',
+                    color: notifTab === 'unread' ? '#ef4444' : 'var(--text-secondary)',
+                    fontWeight: notifTab === 'unread' ? 700 : 500,
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  <span>No leídas</span>
+                  {unreadCount > 0 && (
+                    <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.65rem', padding: '1px 6px', borderRadius: '10px', fontWeight: 800 }}>
+                      {unreadCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Notification Items List */}
+              <div style={{ overflowY: 'auto', maxHeight: '380px', display: 'flex', flexDirection: 'column' }}>
+                {filteredNotifications.length === 0 ? (
+                  <div style={{ padding: '36px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.84rem' }}>
+                    <Inbox size={32} style={{ margin: '0 auto 10px', opacity: 0.4 }} />
+                    <p style={{ margin: 0, fontWeight: 600 }}>
+                      {notifTab === 'unread' ? 'No tienes notificaciones pendientes.' : 'No hay notificaciones registradas.'}
+                    </p>
+                    <p style={{ fontSize: '0.74rem', marginTop: '4px', color: 'var(--text-secondary)' }}>
+                      Las alertas automáticas de inventario, cobros y gastos aparecerán aquí.
+                    </p>
                   </div>
                 ) : (
-                  notifications.map(n => (
-                    <div
-                      key={n.id}
-                      onClick={() => handleMarkAsRead(n.id)}
-                      style={{
-                        padding: '12px 16px',
-                        borderBottom: '1px solid var(--border-color)',
-                        background: n.is_read ? 'transparent' : 'rgba(37, 99, 235, 0.08)',
-                        cursor: 'pointer',
-                        transition: 'background 0.15s'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = n.is_read ? 'transparent' : 'rgba(37, 99, 235, 0.08)'}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-                        {n.priority === 'urgent' ? (
-                          <AlertOctagon size={16} color="#ef4444" style={{ marginTop: '2px', flexShrink: 0 }} />
-                        ) : (
-                          <AlertTriangle size={16} color="#f59e0b" style={{ marginTop: '2px', flexShrink: 0 }} />
-                        )}
-                        <div style={{ flex: 1 }}>
-                          <p style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>{n.title}</p>
-                          <p style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', margin: '3px 0 0' }}>{n.message}</p>
-                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-                            {new Date(n.created_at).toLocaleDateString('es-DO', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
+                  filteredNotifications.map(n => {
+                    const isUrgent = n.priority === 'urgent';
+                    const isHigh = n.priority === 'high';
+                    const isUnread = !n.is_read;
+
+                    return (
+                      <div
+                        key={n.id}
+                        onClick={() => handleNotificationClick(n)}
+                        style={{
+                          padding: '12px 16px',
+                          borderBottom: '1px solid var(--border-color)',
+                          background: isUnread ? (isLight ? 'rgba(59, 130, 246, 0.08)' : 'rgba(37, 99, 235, 0.12)') : 'transparent',
+                          cursor: 'pointer',
+                          position: 'relative',
+                          transition: 'background 0.15s'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = isLight ? '#f1f5f9' : 'rgba(255,255,255,0.06)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = isUnread ? (isLight ? 'rgba(59, 130, 246, 0.08)' : 'rgba(37, 99, 235, 0.12)') : 'transparent'}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                          <div style={{
+                            padding: '6px',
+                            borderRadius: '8px',
+                            background: isUrgent ? 'rgba(239, 68, 68, 0.15)' : isHigh ? 'rgba(245, 158, 11, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                            marginTop: '2px',
+                            flexShrink: 0
+                          }}>
+                            {isUrgent ? (
+                              <AlertOctagon size={16} color="#ef4444" />
+                            ) : isHigh ? (
+                              <AlertTriangle size={16} color="#f59e0b" />
+                            ) : (
+                              <Bell size={16} color="#3b82f6" />
+                            )}
+                          </div>
+
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                              <p style={{
+                                fontSize: '0.82rem',
+                                fontWeight: isUnread ? 800 : 600,
+                                color: isUnread ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                margin: 0,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {n.title}
+                              </p>
+
+                              {isUnread && (
+                                <span style={{
+                                  width: '7px',
+                                  height: '7px',
+                                  borderRadius: '50%',
+                                  background: '#3b82f6',
+                                  flexShrink: 0,
+                                  boxShadow: '0 0 6px #3b82f6'
+                                }} />
+                              )}
+                            </div>
+
+                            <p style={{ fontSize: '0.74rem', color: isUnread ? 'var(--text-primary)' : 'var(--text-muted)', margin: '3px 0 0', lineHeight: '1.35' }}>
+                              {n.message}
+                            </p>
+
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
+                              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                {new Date(n.created_at).toLocaleString('es-DO', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                  <span>Ir al módulo</span>
+                                  <ExternalLink size={10} />
+                                </span>
+
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleDeleteNotification(n.id, e)}
+                                  title="Descartar notificación"
+                                  style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    padding: '2px',
+                                    color: 'var(--text-muted)',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                  }}
+                                  onMouseEnter={(e) => e.currentTarget.style.color = '#ef4444'}
+                                  onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+                                >
+                                  <X size={12} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>

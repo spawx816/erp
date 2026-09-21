@@ -65,17 +65,184 @@ const adminController = {
     }
   },
 
-  // NOTIFICATIONS
+  // LIVE NOTIFICATIONS SYNCHRONIZER & MANAGER
+  syncLiveNotifications: async (companyId) => {
+    try {
+      // 1. Stock Mínimo / Crítico
+      const lowStockRows = await db.prepare(`
+        SELECT p.id, p.name, p.sku, p.stock_min, inv.quantity, w.name as warehouse_name
+        FROM inventories inv
+        JOIN products p ON inv.product_id = p.id
+        JOIN warehouses w ON inv.warehouse_id = w.id
+        WHERE p.company_id = ? AND p.status = 'active' AND p.stock_min > 0 AND inv.quantity <= p.stock_min
+        LIMIT 6
+      `).all(companyId);
+
+      for (const item of lowStockRows) {
+        const title = `Stock Mínimo: ${item.name}`;
+        const existing = await db.prepare(`
+          SELECT id FROM notifications 
+          WHERE company_id = ? AND type = 'stock_low' AND title = ? AND created_at > (CURRENT_DATE - INTERVAL '3 days')
+        `).get(companyId, title);
+
+        if (!existing) {
+          const isZero = Number(item.quantity) <= 0;
+          await db.prepare(`
+            INSERT INTO notifications (company_id, type, title, message, priority, is_read, link, reference_type, reference_id, created_at)
+            VALUES (?, 'stock_low', ?, ?, ?, 0, '/inventory', 'product', ?, CURRENT_TIMESTAMP)
+          `).run(
+            companyId,
+            title,
+            `Existencia en ${Number(item.quantity).toFixed(0)} unidades (mínimo ${item.stock_min}) en ${item.warehouse_name}.`,
+            isZero ? 'urgent' : 'high',
+            item.id
+          );
+        }
+      }
+
+      // 2. Facturas CxC Vencidas
+      const overdueSales = await db.prepare(`
+        SELECT s.id, s.invoice_number, s.sale_number, s.ncf, s.balance, s.due_date, c.company_name as customer_name
+        FROM sales s
+        JOIN customers c ON s.customer_id = c.id
+        WHERE s.company_id = ? AND s.sale_type = 'credit' AND s.balance > 0 AND s.due_date < CURRENT_DATE
+        ORDER BY s.due_date ASC
+        LIMIT 6
+      `).all(companyId);
+
+      for (const sale of overdueSales) {
+        const title = `Factura Vencida: ${sale.customer_name} (${sale.invoice_number || sale.ncf || sale.sale_number})`;
+        const existing = await db.prepare(`
+          SELECT id FROM notifications 
+          WHERE company_id = ? AND type = 'overdue_invoice' AND title = ? AND created_at > (CURRENT_DATE - INTERVAL '3 days')
+        `).get(companyId, title);
+
+        if (!existing) {
+          await db.prepare(`
+            INSERT INTO notifications (company_id, type, title, message, priority, is_read, link, reference_type, reference_id, created_at)
+            VALUES (?, 'overdue_invoice', ?, ?, 'urgent', 0, '/finance', 'sale', ?, CURRENT_TIMESTAMP)
+          `).run(
+            companyId,
+            title,
+            `Saldo pendiente de RD$ ${Number(sale.balance).toLocaleString('es-DO', { minimumFractionDigits: 2 })} vencido desde ${sale.due_date}.`,
+            sale.id
+          );
+        }
+      }
+
+      // 3. Pagos Fijos / Obligaciones Recurrentes Próximas o Vencidas
+      const recurringAlerts = await db.prepare(`
+        SELECT r.id, r.concept, r.estimated_amount, r.next_due_date, r.status
+        FROM recurring_expenses r
+        WHERE r.company_id = ? AND r.next_due_date <= (CURRENT_DATE + INTERVAL '7 days') AND r.status != 'paid'
+        ORDER BY r.next_due_date ASC
+        LIMIT 5
+      `).all(companyId);
+
+      for (const rec of recurringAlerts) {
+        const title = `Alerta Pago Fijo: ${rec.concept}`;
+        const existing = await db.prepare(`
+          SELECT id FROM notifications 
+          WHERE company_id = ? AND type = 'recurring_expense' AND title = ? AND created_at > (CURRENT_DATE - INTERVAL '3 days')
+        `).get(companyId, title);
+
+        if (!existing) {
+          const isOverdue = rec.status === 'overdue';
+          await db.prepare(`
+            INSERT INTO notifications (company_id, type, title, message, priority, is_read, link, reference_type, reference_id, created_at)
+            VALUES (?, 'recurring_expense', ?, ?, ?, 0, '/finance', 'recurring_expense', ?, CURRENT_TIMESTAMP)
+          `).run(
+            companyId,
+            title,
+            `Obligación de RD$ ${Number(rec.estimated_amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })} ${isOverdue ? 'vencida' : 'próxima a vencer'} (${rec.next_due_date}).`,
+            isOverdue ? 'urgent' : 'high',
+            rec.id
+          );
+        }
+      }
+
+      // 4. Clientes con Límite de Crédito Excedido
+      const creditExceeded = await db.prepare(`
+        SELECT c.id, c.code, c.company_name, c.current_balance, c.credit_limit
+        FROM customers c
+        WHERE c.company_id = ? AND c.credit_limit > 0 AND c.current_balance > c.credit_limit
+        LIMIT 5
+      `).all(companyId);
+
+      for (const cust of creditExceeded) {
+        const title = `Límite Excedido: ${cust.company_name}`;
+        const existing = await db.prepare(`
+          SELECT id FROM notifications 
+          WHERE company_id = ? AND type = 'credit_exceeded' AND title = ? AND created_at > (CURRENT_DATE - INTERVAL '3 days')
+        `).get(companyId, title);
+
+        if (!existing) {
+          const pct = ((Number(cust.current_balance) / Number(cust.credit_limit)) * 100).toFixed(0);
+          await db.prepare(`
+            INSERT INTO notifications (company_id, type, title, message, priority, is_read, link, reference_type, reference_id, created_at)
+            VALUES (?, 'credit_exceeded', ?, ?, 'high', 0, '/customers', 'customer', ?, CURRENT_TIMESTAMP)
+          `).run(
+            companyId,
+            title,
+            `Balance RD$ ${Number(cust.current_balance).toLocaleString('es-DO')} excede límite de RD$ ${Number(cust.credit_limit).toLocaleString('es-DO')} (${pct}%).`,
+            cust.id
+          );
+        }
+      }
+
+      // 5. Autorizaciones de Descuento Pendientes
+      const pendingAuths = await db.prepare(`
+        SELECT da.id, da.requested_percent, da.reason, c.company_name as customer_name,
+               u.first_name || ' ' || u.last_name as requester_name
+        FROM discount_authorizations da
+        LEFT JOIN customers c ON da.customer_id = c.id
+        LEFT JOIN users u ON da.requested_by_user_id = u.id
+        WHERE da.company_id = ? AND da.status = 'pending'
+        LIMIT 5
+      `).all(companyId);
+
+      for (const da of pendingAuths) {
+        const title = `Autorización Pendiente: Descuento ${da.requested_percent}%`;
+        const existing = await db.prepare(`
+          SELECT id FROM notifications 
+          WHERE company_id = ? AND type = 'authorization' AND reference_id = ?
+        `).get(companyId, da.id);
+
+        if (!existing) {
+          await db.prepare(`
+            INSERT INTO notifications (company_id, type, title, message, priority, is_read, link, reference_type, reference_id, created_at)
+            VALUES (?, 'authorization', ?, ?, 'urgent', 0, '/security', 'authorization', ?, CURRENT_TIMESTAMP)
+          `).run(
+            companyId,
+            title,
+            `${da.requester_name || 'Vendedor'} solicita ${da.requested_percent}% para ${da.customer_name || 'Cliente'}.`,
+            da.id
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Error in syncLiveNotifications:', err.message);
+    }
+  },
+
   getNotifications: async (req, res) => {
     try {
       const companyId = req.user.company_id;
+      
+      // Sincronizar alertas en vivo en background
+      await adminController.syncLiveNotifications(companyId);
+
       const notifs = await db.prepare(`
         SELECT * FROM notifications
         WHERE company_id = ?
         ORDER BY is_read ASC, created_at DESC
-        LIMIT 25
+        LIMIT 40
       `).all(companyId);
-      const unreadRow = await db.prepare(`SELECT COUNT(*) as count FROM notifications WHERE company_id = ? AND is_read = 0`).get(companyId);
+
+      const unreadRow = await db.prepare(`
+        SELECT COUNT(*) as count FROM notifications WHERE company_id = ? AND is_read = 0
+      `).get(companyId);
+
       const unreadCount = unreadRow ? parseInt(unreadRow.count, 10) || 0 : 0;
       return res.json({ success: true, data: notifs, unread_count: unreadCount });
     } catch (err) {
@@ -89,6 +256,37 @@ const adminController = {
       const { id } = req.params;
       await db.prepare(`UPDATE notifications SET is_read = 1 WHERE id = ? AND company_id = ?`).run(id, companyId);
       return res.json({ success: true, message: 'Notificación marcada como leída.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  markAllNotificationsRead: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      await db.prepare(`UPDATE notifications SET is_read = 1 WHERE company_id = ?`).run(companyId);
+      return res.json({ success: true, message: 'Todas las notificaciones fueron marcadas como leídas.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  clearReadNotifications: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      await db.prepare(`DELETE FROM notifications WHERE company_id = ? AND is_read = 1`).run(companyId);
+      return res.json({ success: true, message: 'Notificaciones leídas eliminadas.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
+  deleteNotification: async (req, res) => {
+    try {
+      const companyId = req.user.company_id;
+      const { id } = req.params;
+      await db.prepare(`DELETE FROM notifications WHERE id = ? AND company_id = ?`).run(id, companyId);
+      return res.json({ success: true, message: 'Notificación eliminada.' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }

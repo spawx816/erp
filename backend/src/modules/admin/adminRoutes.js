@@ -11,7 +11,10 @@ router.get('/search', adminController.globalSearch);
 
 // Notifications Center
 router.get('/notifications', adminController.getNotifications);
+router.post('/notifications/read-all', adminController.markAllNotificationsRead);
+router.delete('/notifications/clear-read', adminController.clearReadNotifications);
 router.post('/notifications/:id/read', adminController.markNotificationRead);
+router.delete('/notifications/:id', adminController.deleteNotification);
 
 // Authorizations (Operaciones sensibles)
 router.get('/authorizations', requirePermission('authorizations.view'), adminController.getAuthorizations);
