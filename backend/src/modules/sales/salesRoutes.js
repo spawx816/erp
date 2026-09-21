@@ -10,11 +10,10 @@ router.use(authenticateToken);
 // Orders & Pedidos Workflow
 router.use('/orders', require('./ordersRoutes'));
 
-// Sales & POS
+// Sales & POS list & checkout
 router.get('/', requirePermission('sales.view'), salesController.getSales);
-router.get('/:id', requirePermission('sales.view'), salesController.getSaleById);
+router.get('/history', requirePermission('sales.view'), salesController.getSales);
 router.post('/checkout', requirePermission('sales.create'), idempotencyMiddleware(), salesController.checkout);
-router.post('/:id/cancel', requirePermission('sales.cancel'), idempotencyMiddleware(), salesController.cancelSale);
 
 // Commissions
 router.get('/commissions/monthly-summary', requirePermission('commissions.view'), salesController.getMonthlyCommissionsSummary);
@@ -30,5 +29,9 @@ router.post('/credit-notes', requirePermission('sales.return'), idempotencyMiddl
 // Quotes
 router.get('/quotes/list', requirePermission('quotes.view'), salesController.getQuotes);
 router.post('/quotes', requirePermission('quotes.create'), salesController.createQuote);
+
+// Parameterized sale routes (must be at the end)
+router.get('/:id', requirePermission('sales.view'), salesController.getSaleById);
+router.post('/:id/cancel', requirePermission('sales.cancel'), idempotencyMiddleware(), salesController.cancelSale);
 
 module.exports = router;

@@ -7,6 +7,8 @@ const { requirePermission } = require('../../middlewares/rbac');
 router.use(authenticateToken);
 
 router.get('/', settingsController.getCompanySettings);
+router.get('/company', settingsController.getCompanySettings);
 router.put('/', requirePermission('settings.manage'), settingsController.updateCompanySettings);
+router.put('/company', requirePermission('settings.manage'), settingsController.updateCompanySettings);
 
 module.exports = router;

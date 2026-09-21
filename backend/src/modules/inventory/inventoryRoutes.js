@@ -9,6 +9,7 @@ router.use(authenticateToken);
 
 router.get('/stock', inventoryController.getStock);
 router.get('/kardex', inventoryController.getKardex);
+router.get('/movements', inventoryController.getKardex);
 router.get('/lots', inventoryController.getLots);
 router.get('/analysis', inventoryController.getInventoryAnalysis);
 router.post('/adjust', requirePermission('inventory.adjust'), idempotencyMiddleware(), inventoryController.adjustStock);
