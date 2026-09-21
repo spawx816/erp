@@ -5,7 +5,7 @@ import {
   AlertTriangle, ShieldAlert, Sparkles, Receipt,
   UserCheck, FileText, HandCoins, AlertCircle, X,
   Phone, MapPin, DollarSign, Clock, ShieldCheck,
-  Send, PackageCheck, ClipboardList
+  Send, PackageCheck, ClipboardList, CheckCircle2
 } from 'lucide-react';
 import api from '../services/api';
 import ThermalReceipt from '../components/ThermalReceipt';
